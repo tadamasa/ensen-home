@@ -1,0 +1,9 @@
+{
+  "name": "ensen-home",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "TZ=Asia/Tokyo node --test tests/*.test.mjs",
+    "serve": "python3 -m http.server 8766"
+  }
+}
