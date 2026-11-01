@@ -90,17 +90,18 @@ function calendarHtml(date) {
       + ((mk.books || []).includes(d) ? '<i class="m-book"></i>' : '') + ((mk.films || []).includes(d) ? '<i class="m-film"></i>' : '');
     const cls = ['cal__cell', d === t ? 'is-today' : '', d === date ? 'is-selected' : '', i && i.trace ? 'has-trace' : ''].join(' ');
     const label = `${Number(d.slice(8))}日${i && i.types.size ? '、縁あり' : ''}${i && i.trace ? '、写真の痕跡あり' : ''}${(mk.books || []).includes(d) ? '、本を読み終えた日' : ''}${(mk.films || []).includes(d) ? '、映画を観た日' : ''}`;
-    return `<a class="${cls}" href="#day/${d}" aria-label="${label}"${d === date ? ' aria-current="date"' : ''}>${Number(d.slice(8))}<span class="cal__dots">${dots}</span></a>`;
+    return `<a class="${cls}${state.rippleDay === d ? ' is-rippling' : ''}" data-day="${d}" href="#day/${d}" aria-label="${label}"${d === date ? ' aria-current="date"' : ''}>${Number(d.slice(8))}<span class="cal__dots">${dots}</span></a>`;
   }).join('');
   const [y, m] = ym.split('-').map(Number);
-  return `<div class="card cal" data-ym="${ym}">
+  const enter = state.calEnter; state.calEnter = '';
+  return `<div class="card cal${enter ? ` cal--enter-${enter}` : ''}" data-ym="${ym}">
     <div class="cal__head">
       <a class="cal__nav" href="#day/${shiftMonth(ym, -1)}-01" aria-label="前の月" style="display:flex;align-items:center;justify-content:center;text-decoration:none">‹</a>
       <span class="cal__label">${y}年${m}月</span>
       <a class="cal__nav" href="#day/${shiftMonth(ym, 1)}-01" aria-label="次の月" style="display:flex;align-items:center;justify-content:center;text-decoration:none">›</a>
     </div>
     <div class="cal__grid cal__week" aria-hidden="true"><span>日</span><span>月</span><span>火</span><span>水</span><span>木</span><span>金</span><span>土</span></div>
-    <div class="cal__grid">${cells}</div>
+    <div class="cal__grid cal__days">${cells}</div>
   </div>`;
 }
 
@@ -212,31 +213,57 @@ async function renderDay(arg) {
   $view.innerHTML = `
     ${calendarHtml(date)}
     <div class="day-head"><h2>${dateLabel(date)}</h2><a class="btn btn--tinted btn--small" href="#record/date/${date}">この日に結ぶ</a></div>
-    ${quiet ? '<p class="empty-line">静かな水面。</p>' : `<div class="flow">${items.map(i => i.html).join('')}</div>`}
+    ${quiet ? '<p class="empty-line">静かな水面。</p>' : `<div class="flow${state.lastDay !== date ? ' flow--enter' : ''}">${items.map((i, n) => i.html.replace('<div class="node', `<div style="--i:${Math.min(n, 12)}" class="node`)).join('')}</div>`}
     <div class="around" id="around"></div>`;
+  state.lastDay = date;
   bindCalendar(date);
   loadMarks(date.slice(0, 7), date);
   $view.querySelectorAll('[data-fix-trace]').forEach(b => b.addEventListener('click', async () => { if (await fixPlace(b.dataset.fixTrace)) { const y = scrollY; await renderDay(date); scrollTo(0, y); } }));
   renderAround(date);
 }
 
-// カレンダーは左右にフリックで月を送る。日はなるべく同じ日に
+// カレンダーは左右にフリックで月を送る。指に追従し、離すと次の月が反対側から流れ込む。日はなるべく同じ日に
+const reduceMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+function goMonth(date, dir) {
+  const ym = shiftMonth(date.slice(0, 7), dir);
+  const [y, m] = ym.split('-').map(Number);
+  const dd = Math.min(Number(date.slice(8)), new Date(y, m, 0).getDate());
+  state.calEnter = dir > 0 ? 'next' : 'prev';
+  location.hash = `#day/${ym}-${String(dd).padStart(2, '0')}`;
+}
 function bindCalendar(date) {
   const cal = $view.querySelector('.cal');
   if (!cal) return;
-  let x0 = null, y0 = null;
-  cal.addEventListener('touchstart', e => { const t = e.touches[0]; x0 = t.clientX; y0 = t.clientY; }, { passive: true });
+  const moving = [cal.querySelector('.cal__days'), cal.querySelector('.cal__label')];
+  const setX = (x, op, tr) => moving.forEach(el => { el.style.transition = tr || 'none'; el.style.transform = x ? `translateX(${x}px)` : ''; el.style.opacity = op == null ? '' : op; });
+  const leave = dir => {
+    if (reduceMotion()) return goMonth(date, dir);
+    setX(-dir * cal.clientWidth * 0.6, 0, 'transform .18s cubic-bezier(.4,0,1,1), opacity .18s');
+    setTimeout(() => goMonth(date, dir), 150);
+  };
+  let x0 = null, y0 = null, t0 = 0, lock = '';
+  cal.addEventListener('touchstart', e => { const t = e.touches[0]; x0 = t.clientX; y0 = t.clientY; t0 = Date.now(); lock = ''; }, { passive: true });
+  cal.addEventListener('touchmove', e => {
+    if (x0 == null) return;
+    const t = e.touches[0], dx = t.clientX - x0, dy = t.clientY - y0;
+    if (!lock && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) lock = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+    if (lock !== 'x' || reduceMotion()) return;
+    // 端に近づくほど重くなる(ゴムのような抵抗)
+    const w = cal.clientWidth, x = dx / (1 + Math.abs(dx) / w);
+    setX(x, 1 - Math.min(Math.abs(x) / w, 0.6));
+  }, { passive: true });
   cal.addEventListener('touchend', e => {
     if (x0 == null) return;
     const t = e.changedTouches[0], dx = t.clientX - x0, dy = t.clientY - y0;
+    const fast = Math.abs(dx) / Math.max(1, Date.now() - t0) > 0.5;
     x0 = null;
-    if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
-    const ym = shiftMonth(date.slice(0, 7), dx < 0 ? 1 : -1);
-    const [y, m] = ym.split('-').map(Number);
-    const dd = Math.min(Number(date.slice(8)), new Date(y, m, 0).getDate());
-    cal.classList.add(dx < 0 ? 'is-leaving-left' : 'is-leaving-right');
-    location.hash = `#day/${ym}-${String(dd).padStart(2, '0')}`;
+    if (lock === 'x' && (Math.abs(dx) > 60 || (fast && Math.abs(dx) > 24)) && Math.abs(dx) > Math.abs(dy)) return leave(dx < 0 ? 1 : -1);
+    setX(0, null, 'transform .42s cubic-bezier(.2,1.4,.4,1), opacity .25s'); // ばねで戻る
   }, { passive: true });
+  cal.querySelectorAll('.cal__nav').forEach((a, i) => a.addEventListener('click', e => { e.preventDefault(); leave(i === 0 ? -1 : 1); }));
+  // 日を押すと、そこに波紋が広がる
+  cal.querySelectorAll('[data-day]').forEach(a => a.addEventListener('click', () => { state.rippleDay = a.dataset.day; }));
+  setTimeout(() => { state.rippleDay = ''; }, 0);
 }
 // 本を読み終えた日・映画を観た日の印(月ごと、ハブで読む)
 async function loadMarks(ym, date) {
@@ -278,7 +305,20 @@ async function renderAround(date) {
   el.querySelectorAll('.fold-text').forEach(w => {
     const body = w.querySelector('.fold-text__body'), btn = w.querySelector('.fold-text__more');
     if (body.scrollHeight > body.clientHeight + 2) btn.hidden = false;
-    const toggle = () => { const open = w.classList.toggle('is-open'); btn.textContent = open ? 'たたむ' : '続きを読む'; };
+    const toggle = () => {
+      const opening = !w.classList.contains('is-open');
+      btn.textContent = opening ? 'たたむ' : '続きを読む';
+      if (reduceMotion()) { w.classList.toggle('is-open', opening); return; }
+      const from = body.clientHeight;
+      w.classList.add('is-open');
+      const full = body.scrollHeight;
+      const to = opening ? full : parseFloat(getComputedStyle(body).lineHeight) * 4;
+      body.style.maxHeight = `${from}px`; body.style.overflow = 'hidden';
+      void body.offsetHeight;
+      body.style.transition = 'max-height .34s cubic-bezier(.25,.8,.25,1)';
+      body.style.maxHeight = `${to}px`;
+      setTimeout(() => { body.style.transition = ''; body.style.maxHeight = ''; body.style.overflow = ''; if (!opening) w.classList.remove('is-open'); }, 360);
+    };
     btn.addEventListener('click', toggle);
     body.addEventListener('click', () => { if (!btn.hidden) toggle(); });
   });
@@ -897,6 +937,9 @@ async function route() {
   if (name !== 'day') window.scrollTo(0, 0);
   watchSync(null);
   if (mapObj && !(name === 'look' && ['map', 'year'].includes(arg || state.look))) { mapObj.remove(); mapObj = null; }
+  const tab = name || 'day';
+  if (state.lastTab && state.lastTab !== tab && !reduceMotion()) { $view.classList.remove('view-enter'); void $view.offsetWidth; $view.classList.add('view-enter'); }
+  state.lastTab = tab;
   switch (name) {
     case 'record': return renderRecord(arg, arg2);
     case 'look': return renderLook(arg);

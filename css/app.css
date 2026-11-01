@@ -305,3 +305,19 @@ svg.ic { width: 24px; height: 24px; stroke: currentColor; fill: none; stroke-wid
 .place-fix { all: unset; cursor: pointer; color: var(--color-label); -webkit-tap-highlight-color: transparent; }
 .place-fix small { margin-left: 6px; font-size: 12px; color: var(--color-accent); }
 .place-fix + .muted { margin-left: 4px; }
+
+/* 手触り: 押すと少し沈む・月が流れ込む・水面に浮かぶ・波紋 */
+.cal__cell, .chip, .btn, .tabbar__item, .place-fix, .fold-text__more { transition: transform .12s var(--ease-ios, ease); }
+.cal__cell:active, .chip:active, .btn:active, .place-fix:active { transform: scale(.94); }
+.cal { overflow: hidden; touch-action: pan-y; }
+.cal__days, .cal__label { will-change: transform; }
+.cal--enter-next .cal__days, .cal--enter-next .cal__label { animation: cal-in-next .32s cubic-bezier(.2,.9,.3,1); }
+.cal--enter-prev .cal__days, .cal--enter-prev .cal__label { animation: cal-in-prev .32s cubic-bezier(.2,.9,.3,1); }
+@keyframes cal-in-next { from { transform: translateX(40%); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes cal-in-prev { from { transform: translateX(-40%); opacity: 0; } to { transform: none; opacity: 1; } }
+.cal__cell.is-rippling::after { content: ""; position: absolute; inset: 0; border-radius: 50%; border: 2px solid var(--color-accent); animation: ripple .7s cubic-bezier(.2,.7,.3,1) forwards; pointer-events: none; }
+.flow--enter > .node { animation: surface .46s cubic-bezier(.2,.8,.3,1) both; animation-delay: calc(var(--i, 0) * 40ms); }
+@keyframes surface { from { opacity: 0; transform: translateY(10px); filter: blur(2px); } to { opacity: 1; transform: none; filter: none; } }
+.view-enter { animation: view-in .26s cubic-bezier(.2,.8,.3,1); }
+@keyframes view-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.around > * { animation: fade-in .3s ease both; }
