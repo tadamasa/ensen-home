@@ -633,11 +633,12 @@ function lookMap(el) {
   const groups = spotSuspects(state.rawEvents, state.spotFixes);
   const doubt = new Set(groups.flatMap(g => g.items.map(i => i.aid)));
   const nDoubt = doubt.size;
+  const nFixed = [...state.spotFixes.values()].filter(f => f.status === 'move' || f.status === 'hide').length;
   const fix = state.map.fix ? spotTarget(state.map.fix, groups) : null;
   if (state.map.fix && !fix) state.map.fix = null;
   const fixPanel = fix ? spotFixPanel(fix) : '';
   el.innerHTML = `<div class="seg">${[['3m', '3か月'], ['1y', '1年'], ['all', 'すべて']].map(([k, l]) => `<button class="chip${per === k ? ' is-active' : ''}" data-per="${k}"${fix ? ' disabled' : ''}>${l}</button>`).join('')}</div>
-    ${!fix && nDoubt ? `<button class="spot-note" id="spot-check" aria-expanded="${!!state.map.check}"><span>位置の怪しいスポットが <b>${nDoubt}</b> か所あります</span><small>${state.map.check ? 'とじる' : '確かめる'}</small></button>` : ''}
+    ${!fix && (nDoubt || nFixed) ? `<button class="spot-note" id="spot-check" aria-expanded="${!!state.map.check}"><span>${nDoubt ? `位置の怪しいスポットが <b>${nDoubt}</b> か所あります` : `位置を直したスポット <b>${nFixed}</b> か所`}</span><small>${state.map.check ? 'とじる' : '確かめる'}</small></button>` : ''}
     <div class="map-wrap${fix ? ' map-wrap--fix' : ''}"><div id="map" role="application" aria-label="${fix ? '置き直す場所を押してください' : '縁の地図'}"></div><button class="map-me" id="map-me" aria-label="現在地へ">${glyph('i-pin', '')}</button></div>
     ${fixPanel}
     ${fix ? '' : `<div class="legend">${TYPES.map(t => `<button class="chip ${kcls(t)}${state.map.off.has(t) ? ' is-off' : ''}" data-lg="${t}" aria-pressed="${!state.map.off.has(t)}"><i></i>${t}</button>`).join('')}</div>
@@ -795,6 +796,15 @@ async function putSpotFix(item, status, pick) {
 }
 const SPOT_ORDER = { anchor: 0, cluster: 1, spread: 2 };
 const sortSpotGroups = groups => groups.slice().sort((a, b) => SPOT_ORDER[a.reason] - SPOT_ORDER[b.reason] || b.items.length - a.items.length);
+// 直したもの(位置不明にしたものは地図に出ないので、ここから元に戻せるように)
+function spotFixedList() {
+  const name = aid => { const e = state.rawEvents.find(x => x.aid === aid); return e ? (e.name || e.place) : aid; };
+  const rows = [...state.spotFixes.values()].filter(f => f.status === 'move' || f.status === 'hide').sort((a, b) => String(b.ts).localeCompare(String(a.ts)));
+  if (!rows.length) return '';
+  return `<div class="card spot-group"><h3>直したスポット</h3>
+    ${rows.map(f => `<button class="spot-row" data-open="${esc(f.aid)}"><span><b>${esc(name(f.aid))}</b><small>${f.status === 'hide' ? '位置不明' : '置き直した'}・${esc(dayOf(f.ts).replace(/-/g, '.'))}</small></span><span class="spot-row__go">見る</span></button>`).join('')}
+  </div>`;
+}
 function spotList(groups) {
   const title = { anchor: g => `よく来る「${g.anchor}」のそばに重なっている`, cluster: g => `40m以内に${g.items.length}か所が重なっている`, spread: () => '同じ場所の記録が離れている' };
   const gs = sortSpotGroups(groups);
@@ -805,6 +815,7 @@ function spotList(groups) {
       ${g.items.map(i => `<button class="spot-row" data-open="${esc(i.aid)}"><span><b>${esc(i.name)}</b><small>${esc(dayOf(i.events[0].ts).replace(/-/g, '.'))}${i.events.length > 1 ? ` ほか${i.events.length - 1}回` : ''}</small></span><span class="spot-row__go">直す</span></button>`).join('')}
       ${g.items.length > 1 ? `<button class="btn btn--plain btn--small" data-allok="${esc(g.key)}">この${g.items.length}か所はどれも正しい</button>` : ''}
     </div>`).join('')}
+    ${spotFixedList()}
   </section>`;
 }
 
