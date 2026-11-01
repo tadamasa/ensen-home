@@ -1,6 +1,6 @@
 // アプリ本体をキャッシュして、電波がなくても開けるようにする。
 // 縁泉ハブ・Gemini・地図タイルなど外部はキャッシュしない。
-const VERSION = 'v7';
+const VERSION = 'v8';
 const PREFIX = 'ensen-home-';
 const CACHE = `${PREFIX}${VERSION}`;
 const SHELL = [
@@ -25,7 +25,8 @@ self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;
   e.respondWith(
-    fetch(e.request).then(res => {
+    // GitHub Pages は10分ほどブラウザにキャッシュさせるので、毎回サーバーに新しいか確かめる
+    fetch(e.request, { cache: 'no-cache' }).then(res => {
       const copy = res.clone();
       caches.open(CACHE).then(c => c.put(e.request, copy));
       return res;
