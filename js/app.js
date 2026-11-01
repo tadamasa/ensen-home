@@ -649,6 +649,7 @@ function lookMap(el) {
   el.querySelectorAll('[data-lg]').forEach(b => b.addEventListener('click', () => { const t = b.dataset.lg; state.map.off.has(t) ? state.map.off.delete(t) : state.map.off.add(t); lookMap(el); }));
   if (byId('spot-check')) byId('spot-check').addEventListener('click', () => { state.map.check = !state.map.check; lookMap(el); if (state.map.check) setTimeout(() => document.querySelector('.spot-list')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60); });
   el.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => openSpotFix(el, b.dataset.open)));
+  if (byId('spot-fixed-all')) byId('spot-fixed-all').addEventListener('click', () => { state.map.fixedAll = true; lookMap(el); });
   el.querySelectorAll('[data-allok]').forEach(b => b.addEventListener('click', async () => {
     const g = groups.find(x => x.key === b.dataset.allok);
     if (!g || !confirm(`${g.items.map(i => `「${i.name}」`).join('')}の${g.items.length}か所を、今の位置で正しいことにします。`)) return;
@@ -720,7 +721,7 @@ function spotFixPanel(fix) {
   const away = pick ? haversine(fix.lat, fix.lng, pick.lat, pick.lng) : 0;
   return `<div class="card spot-fix" role="region" aria-label="位置を直す">
     <div class="spot-fix__head"><b>${esc(fix.name)}</b><span class="muted small">${esc(when)}${fix.events.length > 1 ? `・${fix.events.length}回` : ''}</span></div>
-    <p class="small">${fix.group ? esc(SPOT_REASON[fix.group.reason](fix.group)) + '<br>' : ''}${cur ? `<span class="muted">${cur.status === 'move' ? '直した位置を表示しています。' : cur.status === 'hide' ? '今は位置不明にしています。' : '確かめ済みです。'}</span><br>` : ''}地図を押すと、そこに置き直せます。</p>
+    <p class="small">${fix.group ? esc(SPOT_REASON[fix.group.reason](fix.group)) + '<br>' : ''}${cur ? `<span class="muted">${cur.status === 'move' ? (cur.source === 'auto' ? '店の名前で地図を引いて、自動で置き直した位置を表示しています。' : '直した位置を表示しています。') : cur.status === 'hide' ? '今は位置不明にしています。' : '確かめ済みです。'}</span><br>` : ''}地図を押すと、そこに置き直せます。</p>
     ${cands.length ? `<div class="spot-cands"><span class="chips-label">置き直す先の候補(その日に写真を撮った場所・ほかの回の位置)</span>${cands.map((c, i) => `<button class="chip${pick && pick.cand === i ? ' is-active' : ''}" data-cand="${i}"><span class="cand-no">${i + 1}</span>${esc(c.label)}</button>`).join('')}</div>` : `<p class="small muted">この日の写真の撮影地は見つかりませんでした。</p>`}
     <p class="small spot-fix__pick" aria-live="polite">${pick ? `今の点から <b>${away >= 1000 ? `${(away / 1000).toFixed(1)}km` : `${Math.round(away)}m`}</b> 離れた所を選んでいます。` : ''}</p>
     <div class="spot-fix__acts">
@@ -801,8 +802,11 @@ function spotFixedList() {
   const name = aid => { const e = state.rawEvents.find(x => x.aid === aid); return e ? (e.name || e.place) : aid; };
   const rows = [...state.spotFixes.values()].filter(f => f.status === 'move' || f.status === 'hide').sort((a, b) => String(b.ts).localeCompare(String(a.ts)));
   if (!rows.length) return '';
-  return `<div class="card spot-group"><h3>直したスポット</h3>
-    ${rows.map(f => `<button class="spot-row" data-open="${esc(f.aid)}"><span><b>${esc(name(f.aid))}</b><small>${f.status === 'hide' ? '位置不明' : '置き直した'}・${esc(dayOf(f.ts).replace(/-/g, '.'))}</small></span><span class="spot-row__go">見る</span></button>`).join('')}
+  const shown = state.map.fixedAll ? rows : rows.slice(0, 40);
+  const auto = rows.filter(f => f.source === 'auto').length;
+  return `<div class="card spot-group"><h3>直したスポット ${rows.length}か所${auto ? `(うち店の名前で自動 ${auto})` : ''}</h3>
+    ${shown.map(f => `<button class="spot-row" data-open="${esc(f.aid)}"><span><b>${esc(name(f.aid))}</b><small>${f.status === 'hide' ? '位置不明' : f.source === 'auto' ? '店の名前で自動で置き直した' : '置き直した'}・${esc(dayOf(f.ts).replace(/-/g, '.'))}</small></span><span class="spot-row__go">見る</span></button>`).join('')}
+    ${rows.length > shown.length ? `<button class="btn btn--plain btn--small" id="spot-fixed-all">ほか${rows.length - shown.length}か所も見る</button>` : ''}
   </div>`;
 }
 function spotList(groups) {

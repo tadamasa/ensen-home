@@ -45,3 +45,15 @@ Code.gs を貼り替えて保存したら、「デプロイ」→「デプロイ
 | `MOVIES_SHEET_ID` / `MOVIE_APP_URL` | 映画ハブと映画メモアプリ |
 
 日記・読書ハブ・映画ハブは、泉の画面の「この日の日記」「この日に読み終えた本・観た映画」のために読むだけで、書き込みません。
+
+## スポットの位置を店の名前で直す(SpotMatch.gs)
+
+Swarm から取り込んだ場所の緯度経度は「チェックインした時の iPhone の位置」なので、家などから後でチェックインした店がそこに重なっています。店の名前で地図を引き直して、正しそうな位置に自動で直します。
+
+1. スクリプトエディタの「ファイル +」→「スクリプト」で `SpotMatch` を作り、[SpotMatch.gs](https://raw.githubusercontent.com/tadamasa/ensen-home/main/hub/SpotMatch.gs) の中身を貼って保存します。`Code.gs` も最新に貼り替えます。
+2. 「プロジェクトの設定」→「appsscript.json をエディタで表示する」をオンにして、[appsscript.json](https://raw.githubusercontent.com/tadamasa/ensen-home/main/hub/appsscript.json) の中身に貼り替えます(続きを自動で走らせる権限が増えます)。
+3. 関数 `matchSpots` を選んで「実行」。権限の確認が出たら許可します。約1,750か所を照会し、5分ごとに区切って1分後に自動で続きを走らせます(全部で30〜60分)。結果はシート `spot_match` に入り、縁は書き換えません。
+4. 終わると実行ログ(または「実行数」)に「そのままで正しい ○・置き直す ○・わからない ○」と出ます。`spot_match` を眺めて、よければ `applySpotMatches` を実行します。`spot_fixes` に `source=auto` の行が足され、アプリは次の同期で位置を直します。
+5. 戻したいときは `undoAutoSpotFixes`。自動で足した修正だけを打ち消します(手で直したものはそのまま)。
+
+照会先は OpenStreetMap(Nominatim、1秒に1回)と Google の Maps サービス(Apps Script に組み込み)です。スクリプト プロパティに `GOOGLE_PLACES_API_KEY` があれば Google Places でも引きます(店名にいちばん強い)。チェーン店のように同じ名前が何か所もあるもの、照会先が食い違うものは「わからない」にして、アプリの「確かめる」で手で直します。

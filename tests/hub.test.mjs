@@ -208,3 +208,59 @@ test('スポットの位置の修正を spot_fixes に追記する(シートが�
   hub.post({ token: hub.token, since: res.rev, push: { spot_fixes: [mv] } });
   assert.equal(sh.getLastRow(), 3); // 追記専用
 });
+
+test('スポットを名前で突き合わせ、正しそうな位置を spot_fixes に足す', () => {
+  const HOME = [34.7638, 135.5135];
+  const OSM = {
+    'TOHOシネマズ伊丹': [{ name: 'TOHOシネマズ伊丹', lat: '34.7826', lon: '135.4201', category: 'amenity' }],
+    '吹田市立中央図書館': [{ name: '吹田市立中央図書館', lat: '34.7641', lon: '135.5160', category: 'amenity' }],
+    'セブンイレブン': [{ name: 'セブン-イレブン', lat: '34.770', lon: '135.52', category: 'shop' }, { name: 'セブン-イレブン', lat: '34.80', lon: '135.55', category: 'shop' }],
+    '勝盛': [{ name: '勝盛', lat: '34.95', lon: '136.2', category: 'amenity' }], // 1つだけで50km先: 同名の別の店かもしれない
+  };
+  const urls = [];
+  const fetch = (url) => {
+    urls.push(url);
+    const q = decodeURIComponent(String(url).split('&q=')[1] || '');
+    return { getResponseCode: () => 200, getContentText: () => JSON.stringify(OSM[q] || []) };
+  };
+  const geocode = q => (q === 'PET SHOP JULA 桃山台店'
+    ? { status: 'OK', results: [{ types: ['establishment', 'point_of_interest'], address_components: [{ long_name: 'PET SHOP JULA 桃山台店' }], geometry: { location: { lat: 34.7840, lng: 135.4990 } } }] }
+    : q === 'TOHOシネマズ伊丹'
+      ? { status: 'OK', results: [{ types: ['movie_theater', 'establishment'], address_components: [{ long_name: 'TOHOシネマズ伊丹' }], geometry: { location: { lat: 34.7828, lng: 135.4203 } } }] }
+      : { status: 'OK', results: [{ types: ['locality', 'political'], partial_match: true, address_components: [{ long_name: '吹田市' }], geometry: { location: { lat: 34.76, lng: 135.51 } } }] });
+  const hub = loadHub({ fetch, geocode });
+  const place = (name, aid, lat = HOME[0], lng = HOME[1], tags = '') => hub.gas.event({ type: '場所', name, aid, lat, lng, verb: '発見する', source: 'swarm_backfill', tags });
+  place('TOHOシネマズ伊丹', 'a-toho');
+  place('PET SHOP JULA 桃山台店', 'a-jula', HOME[0] - 0.0005);
+  place('吹田市立中央図書館', 'a-lib', 34.7640, 135.5158);
+  place('セブンイレブン', 'a-711');
+  place('勝盛', 'a-katsu');
+  place('自宅', 'a-home', HOME[0], HOME[1], '自宅,到着');
+  place('手で直した店', 'a-hand');
+  hub.post({ token: hub.token, since: 0, push: { spot_fixes: [{ id: 'h1', mtime: 1, data: { aid: 'a-hand', status: 'hide' } }] } });
+
+  const r = hub.ctx.matchSpots();
+  assert.equal(r.rest, 0);
+  const rows = hub.rows('spot_match');
+  const v = Object.fromEntries(rows.slice(1).map(x => [x[0], x]));
+  assert.equal(v['a-toho'][11], 'move'); assert.equal(v['a-toho'][10], 2);      // OSMとGoogleが一致
+  assert.equal(v['a-jula'][11], 'move'); assert.equal(v['a-jula'][7], 'geocoder'); // 1か所だけでも名前が一致し30km以内
+  assert.equal(v['a-lib'][11], 'ok');
+  assert.equal(v['a-711'][11], 'unknown');   // チェーン店は決めない
+  assert.equal(v['a-katsu'][11], 'unknown'); // 一つの照会先だけで遠すぎる
+  assert.ok(!v['a-home'] && !v['a-hand']);   // 自宅の出入りと、手で直した場所は照会しない
+  assert.ok(urls.every(u => /nominatim/.test(u)));
+
+  const a = hub.ctx.applySpotMatches();
+  assert.deepEqual({ ...a }, { added: 3, moved: 2 });
+  const fx = hub.rows('spot_fixes').slice(1);
+  const toho = fx.find(x => x[2] === 'a-toho');
+  assert.equal(toho[6], 'move'); assert.equal(toho[7], 'auto'); assert.ok(Math.abs(toho[4] - 34.7826) < 0.001);
+  // アプリへは次の同期で届く
+  const got = hub.post({ token: hub.token, since: 0 }).items.filter(i => i.kind === 'spot_fixes').map(i => i.data);
+  assert.equal(got.filter(d => d.source === 'auto').length, 3);
+  // 二度目は足さない・取り消しは auto だけ
+  assert.equal(hub.ctx.applySpotMatches().added, 0);
+  assert.equal(hub.ctx.undoAutoSpotFixes().added, 3);
+  assert.equal(hub.rows('spot_fixes').slice(1).filter(x => x[6] === 'undo').length, 3);
+});
