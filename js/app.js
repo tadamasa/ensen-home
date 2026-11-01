@@ -11,7 +11,7 @@ import {
 } from './ensen.js';
 
 // ---------- 状態 ----------
-const state = { events: [], intents: [], appraisals: [], actants: [], traces: [], around: {}, look: 'map', appr: null, pair: null, frontierOrder: 'new', frontierShown: 150, fogOrder: 'old', map: { period: '1y', off: new Set() } };
+const state = { marks: {}, events: [], intents: [], appraisals: [], actants: [], traces: [], around: {}, look: 'map', appr: null, pair: null, frontierOrder: 'new', frontierShown: 150, fogOrder: 'old', map: { period: '1y', off: new Set() } };
 const blankForm = () => ({ mode: 'event', ts: '', lat: null, lng: null, gps: null, place: '', placeTouched: false, type: null, name: '', verb: null, verbAuto: true, verbsOpen: false, star: false, note: '', photo: '', photoThumb: '', exif: null, trace_id: '', intent_id: '', poi: null, what: '', origin: null, originName: '', itype: null });
 let form = blankForm();
 const $view = document.getElementById('view');
@@ -85,13 +85,15 @@ function calendarHtml(date) {
   const cells = monthCells(ym).map(d => {
     if (!d) return '<span class="cal__cell cal__cell--empty"></span>';
     const i = info[d];
-    const dots = i ? TYPES.filter(x => i.types.has(x)).map(x => `<i class="${kcls(x)}"></i>`).join('') : '';
+    const mk = state.marks[ym] || {};
+    const dots = (i ? TYPES.filter(x => i.types.has(x)).map(x => `<i class="${kcls(x)}"></i>`).join('') : '')
+      + ((mk.books || []).includes(d) ? '<i class="m-book"></i>' : '') + ((mk.films || []).includes(d) ? '<i class="m-film"></i>' : '');
     const cls = ['cal__cell', d === t ? 'is-today' : '', d === date ? 'is-selected' : '', i && i.trace ? 'has-trace' : ''].join(' ');
-    const label = `${Number(d.slice(8))}日${i && i.types.size ? '、縁あり' : ''}${i && i.trace ? '、写真の痕跡あり' : ''}`;
+    const label = `${Number(d.slice(8))}日${i && i.types.size ? '、縁あり' : ''}${i && i.trace ? '、写真の痕跡あり' : ''}${(mk.books || []).includes(d) ? '、本を読み終えた日' : ''}${(mk.films || []).includes(d) ? '、映画を観た日' : ''}`;
     return `<a class="${cls}" href="#day/${d}" aria-label="${label}"${d === date ? ' aria-current="date"' : ''}>${Number(d.slice(8))}<span class="cal__dots">${dots}</span></a>`;
   }).join('');
   const [y, m] = ym.split('-').map(Number);
-  return `<div class="card cal">
+  return `<div class="card cal" data-ym="${ym}">
     <div class="cal__head">
       <a class="cal__nav" href="#day/${shiftMonth(ym, -1)}-01" aria-label="前の月" style="display:flex;align-items:center;justify-content:center;text-decoration:none">‹</a>
       <span class="cal__label">${y}年${m}月</span>
@@ -202,7 +204,7 @@ async function renderDay(arg) {
   const promoted = new Set(state.events.map(e => e.trace_id).filter(Boolean));
   const items = [
     ...evs.map(e => ({ ts: e.ts, html: isHomeMove(e)
-      ? `<div class="node node--home"><span class="node__dot"></span><div class="node__time">${esc(timeOf(e.ts))} 家に${homeKind(e) === '出発' ? 'いってきます' : 'ただいま'}</div></div>`
+      ? `<div class="node node--home"><span class="node__dot"></span><div class="node__time">${esc(timeOf(e.ts))} ${homeKind(e) === '出発' ? '自宅から行ってきます' : '自宅にただいま'}</div></div>`
       : eventNode(e) })),
     ...traceGroups(state.traces.filter(t => dayOf(t.ts) === date && !promoted.has(t.id)).sort(sortTs)).map(g => ({ ts: g[0].ts, html: g.length > 1 ? traceGroupNode(g) : traceNode(g[0], false) })),
   ].sort(sortTs);
@@ -212,8 +214,38 @@ async function renderDay(arg) {
     <div class="day-head"><h2>${dateLabel(date)}</h2><a class="btn btn--tinted btn--small" href="#record/date/${date}">この日に結ぶ</a></div>
     ${quiet ? '<p class="empty-line">静かな水面。</p>' : `<div class="flow">${items.map(i => i.html).join('')}</div>`}
     <div class="around" id="around"></div>`;
+  bindCalendar(date);
+  loadMarks(date.slice(0, 7), date);
   $view.querySelectorAll('[data-fix-trace]').forEach(b => b.addEventListener('click', async () => { if (await fixPlace(b.dataset.fixTrace)) { const y = scrollY; await renderDay(date); scrollTo(0, y); } }));
   renderAround(date);
+}
+
+// カレンダーは左右にフリックで月を送る。日はなるべく同じ日に
+function bindCalendar(date) {
+  const cal = $view.querySelector('.cal');
+  if (!cal) return;
+  let x0 = null, y0 = null;
+  cal.addEventListener('touchstart', e => { const t = e.touches[0]; x0 = t.clientX; y0 = t.clientY; }, { passive: true });
+  cal.addEventListener('touchend', e => {
+    if (x0 == null) return;
+    const t = e.changedTouches[0], dx = t.clientX - x0, dy = t.clientY - y0;
+    x0 = null;
+    if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+    const ym = shiftMonth(date.slice(0, 7), dx < 0 ? 1 : -1);
+    const [y, m] = ym.split('-').map(Number);
+    const dd = Math.min(Number(date.slice(8)), new Date(y, m, 0).getDate());
+    cal.classList.add(dx < 0 ? 'is-leaving-left' : 'is-leaving-right');
+    location.hash = `#day/${ym}-${String(dd).padStart(2, '0')}`;
+  }, { passive: true });
+}
+// 本を読み終えた日・映画を観た日の印(月ごと、ハブで読む)
+async function loadMarks(ym, date) {
+  if (state.marks[ym] || !sync.enabled()) return;
+  try { state.marks[ym] = await sync.ask('month', { month: ym }); } catch { state.marks[ym] = {}; return; }
+  const cal = $view.querySelector(`.cal[data-ym="${ym}"]`);
+  if (!cal) return;
+  cal.outerHTML = calendarHtml(date);
+  bindCalendar(date);
 }
 
 // その日のまわり: 日記・読み終えた本・観た映画(縁泉ハブが読むだけ)。押したときではなく開いたときに一度だけ読む
@@ -227,16 +259,29 @@ async function renderAround(date) {
   }
   if (!location.hash.includes(date) && date !== today()) return;
   const parts = [];
+  const fold = (text, cls) => `<div class="fold-text ${cls}"><p class="fold-text__body">${esc(text)}</p><button class="fold-text__more" hidden>続きを読む</button></div>`;
   const diary = (d.diary && d.diary.entries) || [];
+  if (d.diary && d.diary.ok === false) parts.push(`<p class="hint">日記を読めませんでした: ${esc(d.diary.error || '')}</p>`);
   if (diary.length) parts.push(`<div class="sect">この日の日記<small><a href="${esc(d.diary.url)}" target="_blank" rel="noopener">日記で開く</a></small></div>
-    <div class="card">${diary.map(x => `<div class="diary-line"><div class="diary-line__time">${esc(x.time)}${x.feelings ? `・${esc(x.feelings)}` : ''}</div><p class="diary-line__text">${esc(x.text)}</p></div>`).join('')}</div>`);
+    <div class="card">${diary.map(x => `<div class="diary-line"><div class="diary-line__time">${esc(x.time)}${x.feelings ? `・${esc(x.feelings)}` : ''}</div>${fold(x.text, 'diary-line__text')}</div>`).join('')}</div>`);
   const books = (d.books && d.books.books) || [];
-  const films = (d.films && d.films.films) || [];
-  if (books.length || films.length) parts.push(`<div class="sect">この日に読み終えた本・観た映画</div><div class="card">
+  if (books.length) parts.push(`<div class="sect">この日に読み終えた本</div><div class="card">
     ${books.map(b => `<a class="mini" href="${esc(b.url)}" target="_blank" rel="noopener">${b.cover ? `<img src="${esc(b.cover)}" alt="">` : '<img alt="">'}<span><span class="list-row__title">${esc(b.title)}</span><br><span class="muted small">${esc(b.author)}</span></span></a>`).join('')}
-    ${films.map(f => `<a class="mini" href="${esc(f.url)}" target="_blank" rel="noopener"><img alt=""><span><span class="list-row__title">${esc(f.title)}</span><br><span class="muted small">${esc(f.venue || '映画')}</span></span></a>`).join('')}
+  </div>`);
+  const films = (d.films && d.films.films) || [];
+  if (d.films && d.films.ok === false) parts.push(`<p class="hint">映画ハブを読めませんでした: ${esc(d.films.error || '')}</p>`);
+  if (films.length) parts.push(`<div class="sect">この日に観た映画</div><div class="card">
+    ${films.map(f => `<div class="film"><a class="mini" href="${esc(f.url)}" target="_blank" rel="noopener">${f.poster ? `<img src="${esc(f.poster)}" alt="">` : '<img alt="">'}<span><span class="list-row__title">${esc(f.title)}</span>${f.year ? `<span class="muted small">(${esc(f.year)})</span>` : ''}<br><span class="muted small">${esc([f.place, f.venue, f.directors].filter(Boolean).join('・') || '映画')}${f.score !== '' && f.score != null ? `・${'★'.repeat(Math.max(0, Math.min(5, Math.round(Number(f.score) || 0))))}` : ''}</span></span></a>${f.text ? fold(f.text, 'film__text') : ''}</div>`).join('')}
   </div>`);
   el.innerHTML = parts.join('');
+  // 折りたたみ: はみ出すときだけ「続きを読む」を出す。押すと全文、もう一度でたたむ
+  el.querySelectorAll('.fold-text').forEach(w => {
+    const body = w.querySelector('.fold-text__body'), btn = w.querySelector('.fold-text__more');
+    if (body.scrollHeight > body.clientHeight + 2) btn.hidden = false;
+    const toggle = () => { const open = w.classList.toggle('is-open'); btn.textContent = open ? 'たたむ' : '続きを読む'; };
+    btn.addEventListener('click', toggle);
+    body.addEventListener('click', () => { if (!btn.hidden) toggle(); });
+  });
 }
 
 // ============================================================

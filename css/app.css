@@ -171,7 +171,15 @@ svg.ic { width: 24px; height: 24px; stroke: currentColor; fill: none; stroke-wid
 .diary-line { padding: var(--space-2) 0; }
 .diary-line + .diary-line { border-top: var(--hairline) solid var(--color-separator); }
 .diary-line__time { font-size: 12px; color: var(--color-label-secondary); font-variant-numeric: tabular-nums; }
-.diary-line__text { margin: 2px 0 0; font-family: var(--serif); font-size: 15px; line-height: 24px; white-space: pre-wrap; word-break: break-word; display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical; overflow: hidden; }
+.diary-line__text .fold-text__body { font-family: var(--serif); font-size: 15px; line-height: 24px; }
+.fold-text__body { margin: 2px 0 0; white-space: pre-wrap; word-break: break-word; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.fold-text.is-open .fold-text__body { display: block; -webkit-line-clamp: unset; overflow: visible; }
+.fold-text__more { all: unset; cursor: pointer; font-size: 13px; color: var(--color-accent); padding: 6px 0 2px; }
+.film + .film { border-top: var(--hairline) solid var(--color-separator); }
+.film .mini + .fold-text, .film__text .fold-text__body { font-size: 14px; line-height: 22px; color: var(--color-label); }
+.film__text { padding: 0 0 var(--space-2); }
+.cal__dots i.m-book { background: #3F5A8A; border-radius: 1px; }
+.cal__dots i.m-film { background: #B5485D; border-radius: 1px; }
 .mini { display: flex; gap: var(--space-3); padding: var(--space-2) 0; color: inherit; text-decoration: none; align-items: center; }
 .mini + .mini { border-top: var(--hairline) solid var(--color-separator); }
 .mini img { width: 36px; height: 52px; object-fit: cover; border-radius: 4px; flex: none; background: var(--bg-fill-tertiary); }

@@ -66,6 +66,7 @@ function doPost(e) {
     if (req.action === 'ping') return json_({ ok: true, pong: true });
     if (req.action === 'day') return json_(getDay_(String(req.date || '')));
     if (req.action === 'poi') return json_(nearbyPoi_(req));
+    if (req.action === 'month') return json_(monthMarks_(String(req.month || '')));
     if (req.action) return json_({ ok: false, error: 'unknown action' });
     const lock = LockService.getScriptLock();
     lock.waitLock(25000);
@@ -427,6 +428,8 @@ function booksFor_(dateStr) {
 }
 
 // 映画ハブ views: id, rev, mtime, deleted, date, filmId, filmTitle, place, venue, score, text, json
+// films: id, rev, mtime, deleted, title, year, directors, ..., json(posterPath, genres)。日記ハブの filmsFor_ と同じ読み方
+const FILM_PLACE_LABEL = { stream: '配信', theater: '映画館', tv: 'テレビ', disc: 'ディスク', other: 'その他' };
 function filmsFor_(dateStr) {
   try {
     const ss = SpreadsheetApp.openById(prop_('MOVIES_SHEET_ID', MOVIES_SHEET_ID_DEFAULT));
@@ -437,10 +440,48 @@ function filmsFor_(dateStr) {
     const out = [];
     rows.forEach(function (r) {
       if (String(r[3]).toLowerCase() === 'true' || toDateStr_(r[4]) !== dateStr) return;
-      out.push({ title: String(r[6] || ''), venue: String(r[8] || ''), url: app + '#film/' + encodeURIComponent(String(r[5])) });
+      out.push({ filmId: String(r[5]), title: String(r[6] || ''), place: FILM_PLACE_LABEL[String(r[7])] || String(r[7] || ''), venue: String(r[8] || ''), score: r[9] === '' || r[9] == null ? '' : String(r[9]), text: String(r[10] || ''), url: app + '#film/' + encodeURIComponent(String(r[5])) });
     });
+    if (out.length) {
+      const fs = ss.getSheetByName('films');
+      const fl = fs ? fs.getLastRow() : 0;
+      const ids = fl < 2 ? [] : fs.getRange(2, 1, fl - 1, 1).getValues();
+      const want = {};
+      out.forEach(function (v) { want[v.filmId] = true; });
+      const info = {};
+      for (let i = 0; i < ids.length; i++) {
+        const id = String(ids[i][0]);
+        if (!want[id] || info[id]) continue;
+        const r = fs.getRange(i + 2, 1, 1, 10).getValues()[0];
+        const j = parseJson_(r[9]);
+        info[id] = { title: String(r[4] || ''), year: String(r[5] || ''), directors: String(r[6] || ''), poster: j.posterPath ? 'https://image.tmdb.org/t/p/w185' + j.posterPath : '' };
+      }
+      out.forEach(function (v) { const f = info[v.filmId] || {}; v.title = f.title || v.title; v.year = f.year || ''; v.directors = f.directors || ''; v.poster = f.poster || ''; });
+    }
     return { ok: true, films: out };
   } catch (e) { return { ok: false, error: String(e) }; }
+}
+
+// カレンダーの印: その月に本を読み終えた日・映画を観た日
+function monthMarks_(ym) {
+  if (!/^\d{4}-\d{2}$/.test(ym)) return { ok: false, error: 'bad month' };
+  const out = { ok: true, month: ym, books: [], films: [] };
+  const pick = function (rows, col, keep) {
+    const set = {};
+    rows.forEach(function (r) { const d = toDateStr_(r[col]); if (d.length === 10 && d.substring(0, 7) === ym && keep(r)) set[d] = true; });
+    return Object.keys(set).sort();
+  };
+  try {
+    const sh = SpreadsheetApp.openById(prop_('BOOKS_SHEET_ID', BOOKS_SHEET_ID_DEFAULT)).getSheetByName('books');
+    const rows = sh.getLastRow() < 2 ? [] : sh.getRange(2, 1, sh.getLastRow() - 1, 10).getValues();
+    out.books = pick(rows, 9, function (r) { return String(r[3]).toLowerCase() !== 'true' && String(r[6]) === '読了'; });
+  } catch (e) { out.booksError = String(e); }
+  try {
+    const sh = SpreadsheetApp.openById(prop_('MOVIES_SHEET_ID', MOVIES_SHEET_ID_DEFAULT)).getSheetByName('views');
+    const rows = sh.getLastRow() < 2 ? [] : sh.getRange(2, 1, sh.getLastRow() - 1, 5).getValues();
+    out.films = pick(rows, 4, function (r) { return String(r[3]).toLowerCase() !== 'true'; });
+  } catch (e) { out.filmsError = String(e); }
+  return out;
 }
 
 // ========== 近くの場所の候補(任意。GOOGLE_PLACES_API_KEY があるときだけ) ==========
