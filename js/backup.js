@@ -2,7 +2,7 @@
 // 痕跡の写真サムネは大きいので入れない(縁泉シートの traces に残っている)。
 import * as db from './db.js';
 
-const STORES = ['events', 'intents', 'appraisals', 'actants'];
+const STORES = ['events', 'intents', 'appraisals', 'actants', 'place_names'];
 // キーと、端末ごとの同期の状態は書き出さない
 const SECRET_KEYS = new Set(['geminiKey', 'syncUrl', 'syncToken', 'syncCursor', 'syncDirty', 'syncLastAt']);
 

@@ -7,7 +7,7 @@ import {
   TYPES, VERBS, ORIGINS, TYPE_KEY, TYPE_ICON, VERB_ICON, VERB_ORDER, VERB_TIPS,
   esc, uuid, isoLocal, today, isDate, dayOf, timeOf, toInputValue, fromInputValue, shiftMonth, monthCells, dateLabel, gapLabel, autoSeason,
   findActant, suggestVerb, nearbyPlaces, nameChips, isHomeMove, homeKind, echoOf,
-  frontier, reunions, apprQueue, yearReview, yearStory, yearsOf, SEASONS, meshBounds, latestWeight, mapPoints, distantCandidates, distantPrompt, parseDistant, parseExif,
+  frontier, reunions, apprQueue, placeNameFor, yearReview, yearStory, yearsOf, SEASONS, meshBounds, latestWeight, mapPoints, distantCandidates, distantPrompt, parseDistant, parseExif,
 } from './ensen.js';
 
 // ---------- 状態 ----------
@@ -43,7 +43,8 @@ function setTab(tab) {
 const sortTs = (a, b) => String(a.ts).localeCompare(String(b.ts));
 
 async function load() {
-  const [events, intents, appraisals, actants, traces] = await Promise.all(['events', 'intents', 'appraisals', 'actants', 'traces'].map(s => db.getAll(s)));
+  const [events, intents, appraisals, actants, traces, placeNames] = await Promise.all(['events', 'intents', 'appraisals', 'actants', 'traces', 'place_names'].map(s => db.getAll(s)));
+  state.placeNames = placeNames;
   state.events = events.sort(sortTs);
   state.intents = intents.sort(sortTs);
   state.appraisals = appraisals;
@@ -135,13 +136,33 @@ function eventNode(e) {
   </div>`;
 }
 
+// 痕跡の場所名(直した名前があればそれ)。押すと直せる
+const tPlace = t => placeNameFor(t, state.placeNames);
+function placeBtn(t) {
+  const p = tPlace(t);
+  return `<button class="place-fix" data-fix-trace="${esc(t.id)}" aria-label="場所名を直す">${esc(p.name || '場所の名前なし')}<small>直す</small></button>${p.fixed ? '<span class="muted small">(直した名前)</span>' : ''}`;
+}
+async function fixPlace(id) {
+  const t = traceById(id);
+  if (!t) return false;
+  const cur = tPlace(t);
+  const v = prompt(`この写真の場所名を直します。\n150m以内で撮った、ほかの写真の名前も変わります。\n空にすると元の名前「${t.place || '名前なし'}」に戻ります。`, cur.name);
+  if (v === null) return false;
+  const nv = v.trim();
+  if (nv === cur.name || (!nv && !cur.fixed)) return false; // 変わっていない・戻す修正もない
+  await db.put('place_names', { id: uuid(), ts: isoLocal(), trace_id: t.id, lat: t.lat ?? null, lng: t.lng ?? null, name: nv.slice(0, 80), source: 'home', mtime: Date.now(), pending: true });
+  await load();
+  toast(nv ? `「${nv}」にしました` : '元の名前に戻しました');
+  return true;
+}
+
 function traceNode(t, promoted) {
   return `<div class="node node--trace">
     <span class="node__dot">${glyph('i-pin', '')}</span>
     <div class="node__time">${esc(timeOf(t.ts))}・写真の痕跡</div>
     <div class="trace-card${promoted ? ' is-promoted' : ''}">
       ${t.thumb ? `<img src="${thumbSrc(t)}" alt="この時刻に撮った写真">` : '<span class="ph"></span>'}
-      <div class="trace-card__text">${esc(t.place || '場所の名前なし')}<br><span class="muted small">${promoted ? '縁にしました' : 'まだ痕跡のまま'}</span></div>
+      <div class="trace-card__text">${placeBtn(t)}<br><span class="muted small">${promoted ? '縁にしました' : 'まだ痕跡のまま'}</span></div>
       ${promoted ? '' : `<a class="btn btn--tinted btn--small" href="#record/trace/${encodeURIComponent(t.id)}">縁にする</a>`}
     </div>
   </div>`;
@@ -153,7 +174,7 @@ function traceGroups(ts) {
   for (const t of ts) {
     const g = out[out.length - 1];
     const prev = g && g[g.length - 1];
-    if (prev && (prev.place || '') === (t.place || '') && (new Date(t.ts) - new Date(prev.ts)) <= 3600e3) g.push(t);
+    if (prev && tPlace(prev).name === tPlace(t).name && (new Date(t.ts) - new Date(prev.ts)) <= 3600e3) g.push(t);
     else out.push([t]);
   }
   return out;
@@ -165,7 +186,7 @@ function traceGroupNode(g) {
     <div class="node__time">${esc(timeOf(g[0].ts))}〜${esc(timeOf(g[g.length - 1].ts))}・写真の痕跡 ${g.length}枚</div>
     <div class="trace-card">
       ${withThumb.length ? `<span class="trace-stack">${withThumb.map(t => `<img src="${thumbSrc(t)}" alt="">`).join('')}</span>` : '<span class="ph"></span>'}
-      <div class="trace-card__text">${esc(g[0].place || '場所の名前なし')}<br><span class="muted small">まだ痕跡のまま</span></div>
+      <div class="trace-card__text">${placeBtn(g[0])}<br><span class="muted small">まだ痕跡のまま</span></div>
       <a class="btn btn--tinted btn--small" href="#record/trace/${encodeURIComponent(g[0].id)}">縁にする</a>
     </div>
   </div>`;
@@ -191,6 +212,7 @@ async function renderDay(arg) {
     <div class="day-head"><h2>${dateLabel(date)}</h2><a class="btn btn--tinted btn--small" href="#record/date/${date}">この日に結ぶ</a></div>
     ${quiet ? '<p class="empty-line">静かな水面。</p>' : `<div class="flow">${items.map(i => i.html).join('')}</div>`}
     <div class="around" id="around"></div>`;
+  $view.querySelectorAll('[data-fix-trace]').forEach(b => b.addEventListener('click', async () => { if (await fixPlace(b.dataset.fixTrace)) { const y = scrollY; await renderDay(date); scrollTo(0, y); } }));
   renderAround(date);
 }
 
@@ -271,8 +293,9 @@ function renderRecord(arg, arg2) {
     const t = traceById(arg2);
     form = blankForm();
     if (t) {
-      Object.assign(form, { ts: t.ts, lat: t.lat, lng: t.lng, place: t.place, placeTouched: !!t.place, photoThumb: thumbSrc(t), trace_id: t.id });
-      if (!t.place && t.lat != null) revGeocode(t.lat, t.lng);
+      const pn = tPlace(t).name;
+      Object.assign(form, { ts: t.ts, lat: t.lat, lng: t.lng, place: pn, placeTouched: !!pn, photoThumb: thumbSrc(t), trace_id: t.id });
+      if (!pn && t.lat != null) revGeocode(t.lat, t.lng);
     }
     history.replaceState(null, '', '#record');
   } else if (arg === 'intent' && arg2) {

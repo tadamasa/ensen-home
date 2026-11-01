@@ -99,3 +99,20 @@ test('一年をめぐる: 層・土地・挑戦・深まり', () => {
   assert.match(s, /遠い町/);
   assert.match(s, /恩師、2年ぶり/);
 });
+
+import { placeNameFor } from '../js/ensen.js';
+test('場所名の修正: 自分への修正 → 150m以内の最寄り → 元の名前、空は取り消し', () => {
+  const t = { id: 't1', lat: 35, lng: 139, place: '元の名' };
+  const near = { id: 'f1', ts: '2026-11-01T10:00', trace_id: 'tX', lat: 35.0005, lng: 139, name: '路地の喫茶' }; // 約55m
+  const far = { id: 'f2', ts: '2026-11-01T11:00', trace_id: '', lat: 35.01, lng: 139, name: '遠い' };
+  assert.deepEqual(placeNameFor(t, []).name, '元の名');
+  assert.equal(placeNameFor(t, [near, far]).name, '路地の喫茶');
+  assert.equal(placeNameFor(t, [near, { id: 'f3', ts: '2026-11-01T12:00', trace_id: 't1', lat: 35, lng: 139, name: '我が家の前' }]).name, '我が家の前');
+  // 同じ地点を直し直したら新しい方
+  assert.equal(placeNameFor(t, [near, { ...near, id: 'f4', ts: '2026-11-02T00:00', name: '喫茶ことば' }]).name, '喫茶ことば');
+  // 空で取り消し
+  const undo = { ...near, id: 'f5', ts: '2026-11-03T00:00', name: '' };
+  assert.equal(placeNameFor(t, [near, undo]).name, '元の名');
+  assert.equal(placeNameFor(t, [near, undo]).fixed, false);
+  assert.equal(placeNameFor({ ...t, lat: null, lng: null }, [near]).name, '元の名');
+});

@@ -429,3 +429,26 @@ export function yearStory(r) {
   } else out.push('この一年、再会の弧はまだ架かっていません。');
   return out;
 }
+
+// ---------- 場所名の修正(place_names) ----------
+// 表示名は読むときに決める: (a) その痕跡への最新の修正 → (b) 150m以内で最も近い修正点(同じ地点なら新しい方) → (c) 元の place_name。
+// 採った修正が空の名前なら「取り消し」で、元の名前に戻す。縁泉GAS・日記v2と同じ規則。
+export const FIX_RADIUS_M = 150;
+const SAME_POINT_M = 15;
+export function placeNameFor(t, fixes) {
+  if (!t) return { name: '', fixed: false };
+  const orig = { name: t.place || '', fixed: false };
+  if (!fixes || !fixes.length) return orig;
+  const pick = f => (String(f.name || '').trim() ? { name: String(f.name).trim(), fixed: true, fix: f } : orig);
+  const own = fixes.filter(f => f.trace_id && f.trace_id === t.id).sort((a, b) => String(b.ts).localeCompare(String(a.ts)))[0];
+  if (own && String(own.name || '').trim()) return pick(own);
+  if (!hasPos(t)) return orig;
+  let best = null;
+  for (const f of fixes) {
+    if (!hasPos(f)) continue;
+    const d = haversine(Number(t.lat), Number(t.lng), Number(f.lat), Number(f.lng));
+    if (d > FIX_RADIUS_M) continue;
+    if (!best || d < best.d - SAME_POINT_M || (Math.abs(d - best.d) <= SAME_POINT_M && String(f.ts) > String(best.f.ts))) best = { f, d };
+  }
+  return best ? pick(best.f) : orig;
+}

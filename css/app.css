@@ -294,3 +294,6 @@ svg.ic { width: 24px; height: 24px; stroke: currentColor; fill: none; stroke-wid
 .trace-card .trace-stack img { position: absolute; width: 60px; height: 60px; border: 2px solid var(--bg-grouped-secondary); }
 .trace-stack img:nth-child(1) { left: 0; top: 0; z-index: 4; } .trace-stack img:nth-child(2) { left: 4px; top: 4px; z-index: 3; }
 .trace-stack img:nth-child(3) { left: 8px; top: 8px; z-index: 2; } .trace-stack img:nth-child(4) { left: 12px; top: 12px; z-index: 1; }
+.place-fix { all: unset; cursor: pointer; color: var(--color-label); -webkit-tap-highlight-color: transparent; }
+.place-fix small { margin-left: 6px; font-size: 12px; color: var(--color-accent); }
+.place-fix + .muted { margin-left: 4px; }

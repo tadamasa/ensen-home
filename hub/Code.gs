@@ -35,7 +35,9 @@ const KINDS = {
   appraisals: { sheet: 'appraisals', cols: 5 }, // appraisal_id, ts, target_event_id, weight, note
   actants: { sheet: 'actants', cols: 8 },    // actant_id, type, canonical_name, aliases, keys, first_seen, last_seen, count
   traces: { sheet: 'traces', cols: 8 },      // trace_id, ts, recorded_ts, lat, lng, place_name, photo_key, source (9列目 thumb_b64 は返すときだけ読む)
+  place_names: { sheet: 'place_names', cols: 7 }, // fix_id, ts, trace_id, lat, lng, name, source(場所名の修正。追記専用。traces.place_name は書き換えない)
 };
+const PLACE_NAMES_HEADERS = ['fix_id', 'ts', 'trace_id', 'lat', 'lng', 'name', 'source'];
 const KIND_NAMES = Object.keys(KINDS);
 
 function setup() {
@@ -94,6 +96,7 @@ function sync_(req) {
   each('events', function (item, id) { pushEvent_(st, item, id); });
   each('intents', function (item, id) { pushIntent_(st, item, id); });
   each('appraisals', function (item, id) { pushAppraisal_(st, item, id); });
+  each('place_names', function (item, id) { pushPlaceName_(st, item, id); });
 
   if (st.dirty) writeLedger_(st.lsh, st.ledger);
   props.setProperty('REV', String(st.rev));
@@ -225,6 +228,25 @@ function pushAppraisal_(st, item, id) {
   addRow_(st, 'appraisals', id, row.map(unsafe_), item.mtime);
 }
 
+// 場所名の修正: 1行の追記で表す。空の名前は「修正を取り消して元に戻す」
+function pushPlaceName_(st, item, id) {
+  if (st.byId.place_names[id] !== undefined) return; // 追記専用
+  const p = item.data || {};
+  const lat = Number(p.lat), lng = Number(p.lng);
+  const hasPos = p.lat !== '' && p.lat != null && p.lng !== '' && p.lng != null && isFinite(lat) && isFinite(lng);
+  if (!p.trace_id && !hasPos) throw new Error('trace_id か位置が要ります');
+  const name = String(p.name == null ? '' : p.name).trim();
+  if (name.length > 80) throw new Error('場所名が長すぎます');
+  if (!st.sheets.place_names) {
+    const sh = st.ss.getSheetByName('place_names') || st.ss.insertSheet('place_names');
+    if (sh.getLastRow() === 0) sh.appendRow(PLACE_NAMES_HEADERS);
+    st.sheets.place_names = sh;
+  }
+  const row = [id, isoOr_(p.ts, isoNow_()), String(p.trace_id || ''), hasPos ? lat : '', hasPos ? lng : '', safe_(name), 'home'];
+  st.sheets.place_names.appendRow(row);
+  addRow_(st, 'place_names', id, row.map(unsafe_), item.mtime);
+}
+
 function addRow_(st, kind, id, row, mtime) {
   const r = row.slice(0, KINDS[kind].cols);
   st.byId[kind][id] = st.rows[kind].length;
@@ -310,6 +332,7 @@ function dataOf_(kind, r) {
     const k = parseJson_(r[4]);
     return { id: s(r[0]), type: s(r[1]), name: s(r[2]), aliases: s(r[3]), lat: k.lat != null ? Number(k.lat) : null, lng: k.lng != null ? Number(k.lng) : null, first_seen: isoString_(r[5]), last_seen: isoString_(r[6]), count: Number(r[7]) || 0 };
   }
+  if (kind === 'place_names') return { id: s(r[0]), ts: isoString_(r[1]), trace_id: s(r[2]), lat: n(r[3]), lng: n(r[4]), name: s(r[5]), source: s(r[6]) };
   return { id: s(r[0]), ts: isoString_(r[1]), lat: n(r[3]), lng: n(r[4]), place: s(r[5]), source: s(r[7]), thumb: '' };
 }
 

@@ -5,8 +5,8 @@
 // - 台帳(actants)と痕跡(traces)は受け取るだけ
 import * as db from './db.js';
 
-const KINDS = ['events', 'intents', 'appraisals', 'actants', 'traces'];
-const PUSH_KINDS = ['events', 'intents', 'appraisals'];
+const KINDS = ['events', 'intents', 'appraisals', 'actants', 'traces', 'place_names'];
+const PUSH_KINDS = ['events', 'intents', 'appraisals', 'place_names'];
 const PUSH_CHARS = 3000000; // 1回に送るおおよその大きさ(写真つきの縁があるため)
 let dirty = {}; // 未送信: { "kind|id": mtime }
 let cfg = { url: '', token: '' };
@@ -98,7 +98,7 @@ export async function apply(items) {
     if (!it.data) continue;
     const rec = { ...it.data, id: it.id, mtime: it.mtime };
     if (local && local.photoThumb) rec.photoThumb = local.photoThumb;
-    if (it.kind === 'events' || it.kind === 'appraisals') delete dirty[key]; // ハブに届いた
+    if (it.kind === 'events' || it.kind === 'appraisals' || it.kind === 'place_names') delete dirty[key]; // ハブに届いた
     await db.put(it.kind, rec, { silent: true });
     changed++;
   }

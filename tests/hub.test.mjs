@@ -168,3 +168,19 @@ test('近くの場所の候補はキーがあるときだけ', () => {
   const r = hub.post({ token: hub.token, action: 'poi', lat: 35, lng: 139 });
   assert.equal(r.poi[0].name, '近くの喫茶');
 });
+
+test('場所名の修正を place_names に追記する(シートがなければ作る)', () => {
+  const hub = loadHub();
+  const first = hub.post({ token: hub.token, since: 0 });
+  const fix = { id: 'fx-1', mtime: 5, data: { id: 'fx-1', ts: '2026-11-01T13:00:00+09:00', trace_id: 'tr-1', lat: 35.1, lng: 139.1, name: '=路地の喫茶' } };
+  const res = hub.post({ token: hub.token, since: first.rev, push: { place_names: [fix, { id: 'fx-2', data: { name: '位置なし' } }] } });
+  assert.equal(res.rejected.length, 1);
+  assert.equal(res.rejected[0].id, 'fx-2');
+  const sh = hub.ensen.getSheetByName('place_names');
+  assert.ok(sh);
+  const got = byKind(res, 'place_names')[0].data;
+  assert.equal(got.name, '=路地の喫茶'); assert.equal(got.trace_id, 'tr-1'); assert.equal(got.lat, 35.1); assert.equal(got.source, 'home');
+  // 追記専用: 同じidは二度書かない
+  hub.post({ token: hub.token, since: res.rev, push: { place_names: [fix] } });
+  assert.equal(sh.getLastRow(), 2);
+});
