@@ -40,6 +40,8 @@ export async function initSync(opts = {}) {
   const [url, token, saved, lastAt] = await Promise.all([db.getMeta('syncUrl', ''), db.getMeta('syncToken', ''), db.getMeta('syncDirty'), db.getMeta('syncLastAt')]);
   cfg = { url: url || '', token: token || '' };
   if (saved) dirty = saved;
+  // 場所名の修正は、ハブがまだ受け取れない版だと送っても残らない。届くまで(手元に pending が残る間)は毎回送り直す
+  for (const r of await db.getAll('place_names')) if (r.pending) dirty[`place_names|${r.id}`] = r.mtime || 1;
   status.state = cfg.url ? 'idle' : 'off';
   status.lastAt = lastAt;
   db.onChange(mark);
