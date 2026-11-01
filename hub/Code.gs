@@ -36,8 +36,11 @@ const KINDS = {
   actants: { sheet: 'actants', cols: 8 },    // actant_id, type, canonical_name, aliases, keys, first_seen, last_seen, count
   traces: { sheet: 'traces', cols: 8 },      // trace_id, ts, recorded_ts, lat, lng, place_name, photo_key, source (9列目 thumb_b64 は返すときだけ読む)
   place_names: { sheet: 'place_names', cols: 7 }, // fix_id, ts, trace_id, lat, lng, name, source(場所名の修正。追記専用。traces.place_name は書き換えない)
+  spot_fixes: { sheet: 'spot_fixes', cols: 8 },   // fix_id, ts, actant_id, event_id, lat, lng, status, source(スポットの位置の修正。追記専用。events の lat/lng は書き換えない)
 };
 const PLACE_NAMES_HEADERS = ['fix_id', 'ts', 'trace_id', 'lat', 'lng', 'name', 'source'];
+const SPOT_FIXES_HEADERS = ['fix_id', 'ts', 'actant_id', 'event_id', 'lat', 'lng', 'status', 'source'];
+const SPOT_STATUS = ['move', 'hide', 'ok', 'undo'];
 const KIND_NAMES = Object.keys(KINDS);
 
 function setup() {
@@ -98,6 +101,7 @@ function sync_(req) {
   each('intents', function (item, id) { pushIntent_(st, item, id); });
   each('appraisals', function (item, id) { pushAppraisal_(st, item, id); });
   each('place_names', function (item, id) { pushPlaceName_(st, item, id); });
+  each('spot_fixes', function (item, id) { pushSpotFix_(st, item, id); });
 
   if (st.dirty) writeLedger_(st.lsh, st.ledger);
   props.setProperty('REV', String(st.rev));
@@ -248,6 +252,27 @@ function pushPlaceName_(st, item, id) {
   addRow_(st, 'place_names', id, row.map(unsafe_), item.mtime);
 }
 
+// スポットの位置の修正: 台帳(actant_id)ごとに、いちばん新しい行が効く。
+// move=lat/lngへ置き直す / hide=位置不明 / ok=確かめた / undo=元に戻す
+function pushSpotFix_(st, item, id) {
+  if (st.byId.spot_fixes[id] !== undefined) return; // 追記専用
+  const p = item.data || {};
+  const status = String(p.status || '');
+  if (SPOT_STATUS.indexOf(status) < 0) throw new Error('status は ' + SPOT_STATUS.join('/'));
+  if (!p.aid) throw new Error('actant_id が空です');
+  const lat = Number(p.lat), lng = Number(p.lng);
+  const hasPos = p.lat !== '' && p.lat != null && p.lng !== '' && p.lng != null && isFinite(lat) && isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
+  if (status === 'move' && !hasPos) throw new Error('置き直す位置が要ります');
+  if (!st.sheets.spot_fixes) {
+    const sh = st.ss.getSheetByName('spot_fixes') || st.ss.insertSheet('spot_fixes');
+    if (sh.getLastRow() === 0) sh.appendRow(SPOT_FIXES_HEADERS);
+    st.sheets.spot_fixes = sh;
+  }
+  const row = [id, isoOr_(p.ts, isoNow_()), safe_(String(p.aid)), safe_(String(p.event_id || '')), status === 'move' ? lat : '', status === 'move' ? lng : '', status, 'home'];
+  st.sheets.spot_fixes.appendRow(row);
+  addRow_(st, 'spot_fixes', id, row.map(unsafe_), item.mtime);
+}
+
 function addRow_(st, kind, id, row, mtime) {
   const r = row.slice(0, KINDS[kind].cols);
   st.byId[kind][id] = st.rows[kind].length;
@@ -333,6 +358,7 @@ function dataOf_(kind, r) {
     const k = parseJson_(r[4]);
     return { id: s(r[0]), type: s(r[1]), name: s(r[2]), aliases: s(r[3]), lat: k.lat != null ? Number(k.lat) : null, lng: k.lng != null ? Number(k.lng) : null, first_seen: isoString_(r[5]), last_seen: isoString_(r[6]), count: Number(r[7]) || 0 };
   }
+  if (kind === 'spot_fixes') return { id: s(r[0]), ts: isoString_(r[1]), aid: s(r[2]), event_id: s(r[3]), lat: n(r[4]), lng: n(r[5]), status: s(r[6]), source: s(r[7]) };
   if (kind === 'place_names') return { id: s(r[0]), ts: isoString_(r[1]), trace_id: s(r[2]), lat: n(r[3]), lng: n(r[4]), name: s(r[5]), source: s(r[6]) };
   return { id: s(r[0]), ts: isoString_(r[1]), lat: n(r[3]), lng: n(r[4]), place: s(r[5]), source: s(r[7]), thumb: '' };
 }

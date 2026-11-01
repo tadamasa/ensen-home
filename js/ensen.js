@@ -452,3 +452,123 @@ export function placeNameFor(t, fixes) {
   }
   return best ? pick(best.f) : orig;
 }
+
+// ---------- スポットの位置の修正(spot_fixes) ----------
+// Swarm の書き出しの緯度経度は「チェックインした時の端末の位置」なので、後から家などでチェックインした分は
+// 店の位置とずれている。events の lat/lng は書き換えず、spot_fixes(追記専用)を読むときに当てる。
+// 1行 = その台帳(actant_id)の位置の決め直し。同じ台帳はいちばん新しい行が効く。
+//   move: lat/lng に置き直す / hide: 位置不明(地図に出さない) / ok: 確かめた、このままでよい / undo: 元に戻す
+export const SPOT_STATUS = ['move', 'hide', 'ok', 'undo'];
+export function latestSpotFixes(fixes) {
+  const m = new Map();
+  for (const f of fixes || []) {
+    if (!f || !f.aid || !SPOT_STATUS.includes(f.status)) continue;
+    const cur = m.get(f.aid);
+    if (!cur || String(f.ts) > String(cur.ts)) m.set(f.aid, f);
+  }
+  for (const [k, f] of m) if (f.status === 'undo') m.delete(k);
+  return m;
+}
+// 縁にも台帳にも同じ形で当てる(aid か id で台帳を引く)。元の位置は orig に残す
+export function applySpotFixes(rows, fixes, key = 'aid') {
+  const m = fixes instanceof Map ? fixes : latestSpotFixes(fixes);
+  if (!m.size) return rows;
+  return rows.map(r => {
+    const f = m.get(r[key]);
+    if (!f) return r;
+    const orig = r.orig || { lat: r.lat, lng: r.lng };
+    if (f.status === 'move' && hasPos(f)) return { ...r, lat: Number(f.lat), lng: Number(f.lng), orig, posFix: 'move' };
+    if (f.status === 'hide') return { ...r, lat: null, lng: null, orig, posFix: 'hide' };
+    return { ...r, posFix: f.status };
+  });
+}
+
+// 位置の怪しいスポットを探す(events は修正を当てる前のもの)。まとまりごとに返す。
+//  いつもの場所の近く: 何度も来た場所(5回以上)の記録点から100m以内に、一度きりの場所が乗っている
+//                      (家や職場から後でチェックインした跡。何度も来た場所そのものは疑わない)
+//  寄り集まり:         別々の場所が40m以内に3つ以上重なっている(旅先の宿などから後でまとめてチェックインした跡)
+//  ばらつき:           同じ場所の記録どうしが1km以上離れている
+// 確かめた(ok)・直した(move/hide)ものは出さない
+export function spotSuspects(events, fixes, { anchorM = 100, clusterM = 40, minPlaces = 3, regular = 5, spreadM = 1000 } = {}) {
+  const done = fixes instanceof Map ? fixes : latestSpotFixes(fixes);
+  const byAid = new Map();
+  for (const e of events) {
+    if (e.type !== '場所' || !e.aid || !hasPos(e) || isHomeMove(e)) continue;
+    (byAid.get(e.aid) || byAid.set(e.aid, []).get(e.aid)).push(e);
+  }
+  const isRegular = a => byAid.get(a).length >= regular;
+  const pts = [];
+  for (const [aid, evs] of byAid) for (const e of evs) pts.push({ aid, lat: Number(e.lat), lng: Number(e.lng) });
+  pts.sort((a, b) => a.lat - b.lat);
+  // 緯度で並べてあるので、近い範囲だけ比べる
+  const around = (lat, lng, m) => {
+    const dl = m / 110000;
+    let lo = 0, hi = pts.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (pts[mid].lat < lat - dl) lo = mid + 1; else hi = mid; }
+    const out = [];
+    for (let j = lo; j < pts.length && pts[j].lat <= lat + dl; j++) if (haversine(lat, lng, pts[j].lat, pts[j].lng) <= m) out.push(pts[j]);
+    return out;
+  };
+  const groups = [];
+  const flagged = new Set();
+  const take = a => !isRegular(a) && !done.has(a) && !flagged.has(a);
+  // いつもの場所の近く
+  for (const [aid, evs] of byAid) {
+    if (!isRegular(aid)) continue;
+    const items = new Set();
+    for (const e of evs) for (const q of around(Number(e.lat), Number(e.lng), anchorM)) if (take(q.aid)) items.add(q.aid);
+    if (!items.size) continue;
+    items.forEach(a => flagged.add(a));
+    const c = spotItem(aid, evs);
+    groups.push({ key: `a:${aid}`, reason: 'anchor', anchor: c.name, lat: c.lat, lng: c.lng, items: [...items].map(a => spotItem(a, byAid.get(a))) });
+  }
+  // 寄り集まり
+  for (const p of pts) {
+    if (flagged.has(p.aid)) continue;
+    const near = around(p.lat, p.lng, clusterM);
+    if (new Set(near.map(q => q.aid)).size < minPlaces) continue;
+    const items = [...new Set(near.map(q => q.aid))].filter(take);
+    if (!items.length) continue;
+    items.forEach(a => flagged.add(a));
+    groups.push({ key: `c:${items[0]}`, reason: 'cluster', lat: p.lat, lng: p.lng, items: items.map(a => spotItem(a, byAid.get(a))) });
+  }
+  // ばらつき
+  for (const [aid, evs] of byAid) {
+    if (evs.length < 2 || done.has(aid) || flagged.has(aid)) continue;
+    let far = 0;
+    for (let i = 0; i < evs.length; i++) for (let j = i + 1; j < evs.length; j++) far = Math.max(far, haversine(Number(evs[i].lat), Number(evs[i].lng), Number(evs[j].lat), Number(evs[j].lng)));
+    if (far < spreadM) continue;
+    const it = spotItem(aid, evs);
+    groups.push({ key: `s:${aid}`, reason: 'spread', lat: it.lat, lng: it.lng, far: Math.round(far), items: [it] });
+  }
+  return groups;
+}
+function spotItem(aid, evs) {
+  const s = evs.slice().sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
+  const top = s[s.length - 1];
+  return { aid, name: top.name || top.place, events: s, lat: Number(top.lat), lng: Number(top.lng) };
+}
+
+// 置き直す先の候補: (1) 同じ場所のほかの回の位置 (2) その縁の日に撮った写真の撮影地(今の点から500m以上離れたもの)
+// 写真は150mでまとめ、縁の時刻に近い順。名前は場所名の修正を当てたもの
+export function spotCandidates(item, traces, placeNames = [], { minM = 500, max = 6 } = {}) {
+  const out = [];
+  const add = (c) => {
+    if (out.some(o => haversine(o.lat, o.lng, c.lat, c.lng) < 150)) return;
+    if (haversine(item.lat, item.lng, c.lat, c.lng) < minM) return;
+    out.push(c);
+  };
+  for (const e of item.events) if (hasPos(e)) add({ kind: 'visit', lat: Number(e.lat), lng: Number(e.lng), label: `${dayOf(e.ts).replace(/-/g, '.')}の記録の位置` });
+  const days = new Set(item.events.map(e => dayOf(e.ts)));
+  const at = ts => Date.parse(String(ts).slice(0, 19)) || 0;
+  const ref = item.events.map(e => at(e.ts));
+  const photos = (traces || []).filter(t => hasPos(t) && days.has(dayOf(t.ts)))
+    .map(t => ({ t, gap: Math.min(...ref.map(r => Math.abs(at(t.ts) - r))) }))
+    .sort((a, b) => a.gap - b.gap);
+  for (const { t } of photos) {
+    if (out.length >= max) break;
+    const nm = placeNameFor(t, placeNames).name;
+    add({ kind: 'photo', lat: Number(t.lat), lng: Number(t.lng), label: `${timeOf(t.ts)}の写真${nm ? `・${nm}` : ''}`, trace_id: t.id });
+  }
+  return out.slice(0, max);
+}

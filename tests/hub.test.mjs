@@ -184,3 +184,27 @@ test('場所名の修正を place_names に追記する(シートがなければ
   hub.post({ token: hub.token, since: res.rev, push: { place_names: [fix] } });
   assert.equal(sh.getLastRow(), 2);
 });
+
+test('スポットの位置の修正を spot_fixes に追記する(シートがなければ作る)', () => {
+  const hub = loadHub();
+  const first = hub.post({ token: hub.token, since: 0 });
+  const mv = { id: 'sf-1', mtime: 5, data: { id: 'sf-1', ts: '2026-11-01T22:00:00+09:00', aid: 'a-toho', event_id: 'e-1', lat: 34.7826, lng: 135.4201, status: 'move' } };
+  const bad = [
+    { id: 'sf-2', data: { aid: 'a-x', status: 'move' } },          // 位置がない
+    { id: 'sf-3', data: { aid: 'a-x', status: 'delete' } },        // 語彙の外
+    { id: 'sf-4', data: { status: 'ok' } },                         // 台帳がない
+  ];
+  const ok = { id: 'sf-5', mtime: 6, data: { id: 'sf-5', aid: 'a-lib', status: 'ok', lat: 1, lng: 2 } };
+  const res = hub.post({ token: hub.token, since: first.rev, push: { spot_fixes: [mv, ...bad, ok] } });
+  assert.deepEqual(res.rejected.map(r => r.id).sort(), ['sf-2', 'sf-3', 'sf-4']);
+  const sh = hub.ensen.getSheetByName('spot_fixes');
+  assert.ok(sh);
+  assert.equal(sh.getLastRow(), 3);
+  const got = byKind(res, 'spot_fixes');
+  const m = got.find(x => x.id === 'sf-1').data;
+  assert.equal(m.aid, 'a-toho'); assert.equal(m.event_id, 'e-1'); assert.equal(m.lat, 34.7826); assert.equal(m.status, 'move'); assert.equal(m.source, 'home');
+  const o = got.find(x => x.id === 'sf-5').data;
+  assert.equal(o.lat, null); // ok には位置を残さない
+  hub.post({ token: hub.token, since: res.rev, push: { spot_fixes: [mv] } });
+  assert.equal(sh.getLastRow(), 3); // 追記専用
+});
