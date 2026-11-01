@@ -290,3 +290,7 @@ svg.ic { width: 24px; height: 24px; stroke: currentColor; fill: none; stroke-wid
 .legend--static { padding: 0 0 var(--space-2); }
 .legend--static .chip { pointer-events: none; }
 .map-wrap--year { height: min(42vh, 340px); }
+.trace-stack { position: relative; width: 72px; height: 72px; flex: none; }
+.trace-card .trace-stack img { position: absolute; width: 60px; height: 60px; border: 2px solid var(--bg-grouped-secondary); }
+.trace-stack img:nth-child(1) { left: 0; top: 0; z-index: 4; } .trace-stack img:nth-child(2) { left: 4px; top: 4px; z-index: 3; }
+.trace-stack img:nth-child(3) { left: 8px; top: 8px; z-index: 2; } .trace-stack img:nth-child(4) { left: 12px; top: 12px; z-index: 1; }

@@ -147,6 +147,30 @@ function traceNode(t, promoted) {
   </div>`;
 }
 
+// 同じ場所で続けて撮った写真の痕跡(1時間以内)を一つにまとめる。過去の写真を一括で取り込んだ日が長くならないように
+function traceGroups(ts) {
+  const out = [];
+  for (const t of ts) {
+    const g = out[out.length - 1];
+    const prev = g && g[g.length - 1];
+    if (prev && (prev.place || '') === (t.place || '') && (new Date(t.ts) - new Date(prev.ts)) <= 3600e3) g.push(t);
+    else out.push([t]);
+  }
+  return out;
+}
+function traceGroupNode(g) {
+  const withThumb = g.filter(t => t.thumb).slice(0, 4);
+  return `<div class="node node--trace">
+    <span class="node__dot">${glyph('i-pin', '')}</span>
+    <div class="node__time">${esc(timeOf(g[0].ts))}〜${esc(timeOf(g[g.length - 1].ts))}・写真の痕跡 ${g.length}枚</div>
+    <div class="trace-card">
+      ${withThumb.length ? `<span class="trace-stack">${withThumb.map(t => `<img src="${thumbSrc(t)}" alt="">`).join('')}</span>` : '<span class="ph"></span>'}
+      <div class="trace-card__text">${esc(g[0].place || '場所の名前なし')}<br><span class="muted small">まだ痕跡のまま</span></div>
+      <a class="btn btn--tinted btn--small" href="#record/trace/${encodeURIComponent(g[0].id)}">縁にする</a>
+    </div>
+  </div>`;
+}
+
 async function renderDay(arg) {
   const date = isDate(arg) ? arg : today();
   setTab('day');
@@ -159,7 +183,7 @@ async function renderDay(arg) {
     ...evs.map(e => ({ ts: e.ts, html: isHomeMove(e)
       ? `<div class="node node--home"><span class="node__dot"></span><div class="node__time">${esc(timeOf(e.ts))} 家に${homeKind(e) === '出発' ? 'いってきます' : 'ただいま'}</div></div>`
       : eventNode(e) })),
-    ...state.traces.filter(t => dayOf(t.ts) === date && !promoted.has(t.id)).map(t => ({ ts: t.ts, html: traceNode(t, false) })),
+    ...traceGroups(state.traces.filter(t => dayOf(t.ts) === date && !promoted.has(t.id)).sort(sortTs)).map(g => ({ ts: g[0].ts, html: g.length > 1 ? traceGroupNode(g) : traceNode(g[0], false) })),
   ].sort(sortTs);
   const quiet = !items.length;
   $view.innerHTML = `
