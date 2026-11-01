@@ -1,12 +1,12 @@
 // アプリ本体をキャッシュして、電波がなくても開けるようにする。
 // 縁泉ハブ・Gemini・地図タイルなど外部はキャッシュしない。
-const VERSION = 'v1';
+const VERSION = 'v2';
 const PREFIX = 'ensen-home-';
 const CACHE = `${PREFIX}${VERSION}`;
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest',
   'css/hig-tokens.css', 'css/hig-components.css', 'css/app.css',
-  'js/app.js', 'js/db.js', 'js/ensen.js', 'js/sync.js', 'js/gemini.js', 'js/backup.js',
+  'js/app.js', 'js/db.js', 'js/ensen.js', 'js/sync.js', 'js/gemini.js', 'js/backup.js', 'js/story.js',
   'vendor/leaflet/leaflet.js', 'vendor/leaflet/leaflet.css',
   'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png',
 ];

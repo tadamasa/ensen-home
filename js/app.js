@@ -1,3 +1,4 @@
+import { STORY, STORY_TITLE, STORY_LEAD } from './story.js';
 import * as db from './db.js';
 import * as sync from './sync.js';
 import * as gemini from './gemini.js';
@@ -668,13 +669,28 @@ function watchSync(el) {
 const THEME_CARDS = [
   ['auto', 'おまかせ(暦と時刻)', '#F3EEE3', '#A9D2B4'], ['spring', '春', '#F3EEE3', '#A9D2B4'], ['summer', '夏', '#EEF5F3', '#93CAD6'], ['autumn', '秋', '#F4EEE3', '#D9B383'], ['winter', '冬(夜・ダーク)', '#12201F', '#3A5A62'],
 ];
-async function renderSettings() {
+// 物語「泉のほとりの一年」
+function renderStory() {
+  setTab('settings');
+  setTitle(STORY_TITLE, { back: true, sub: '縁泉の物語' });
+  const para = t => `<p>${esc(t).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')}</p>`;
+  $view.innerHTML = `<article class="story">
+    <p class="story__lead">${esc(STORY_LEAD)}</p>
+    ${STORY.map(([h, ps]) => `<section><h2>${esc(h)}</h2>${ps.map(para).join('')}</section>`).join('')}
+    <div class="actions"><a class="btn btn--tinted" href="#settings" style="text-decoration:none">設定へ戻る</a></div>
+  </article>`;
+}
+
+async function renderSettings(arg) {
+  if (arg === 'story') return renderStory();
   setTab('settings');
   setTitle('設定');
   const [url, token, key, model, lastBackupAt] = await Promise.all([db.getMeta('syncUrl', ''), db.getMeta('syncToken', ''), db.getMeta('geminiKey', ''), db.getMeta('geminiModel', ''), db.getMeta('lastBackupAt', '')]);
   const pref = themePref();
   const errors = state.events.filter(e => e.error);
   $view.innerHTML = `
+    <a class="card story-link" href="#settings/story"><span class="story-link__title">縁泉の物語 ─ ${esc(STORY_TITLE)}</span><span class="story-link__sub">縁泉を使う一人の一年。何を考え、何をして、何ができるかを場面で語ります</span></a>
+
     <details class="fold" ${url ? '' : 'open'}><summary>縁泉ハブ(同期)<small id="sync-short">${url ? 'つないでいます' : '未接続'}</small></summary><div class="fold__body">
       <div class="card">
         <div class="row"><label for="s-url">URL</label><input id="s-url" type="url" placeholder="https://script.google.com/macros/s/…/exec" value="${esc(url)}" autocomplete="off"></div>
@@ -745,7 +761,7 @@ async function route() {
   switch (name) {
     case 'record': return renderRecord(arg, arg2);
     case 'look': return renderLook(arg);
-    case 'settings': return renderSettings();
+    case 'settings': return renderSettings(arg);
     default: return renderDay(arg);
   }
 }
