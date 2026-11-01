@@ -1,6 +1,6 @@
 // IndexedDB の薄いラッパー。外部ライブラリなしで動かす。
 const DB_NAME = 'ensen-home';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 let dbPromise = null;
 
@@ -10,8 +10,8 @@ function open() {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
-      // 縁(events)・試す(intents)・評価(appraisals)・場所名の修正(place_names)はアプリでも書く。台帳(actants)と痕跡(traces)はハブから受け取るだけ
-      for (const name of ['events', 'intents', 'appraisals', 'actants', 'traces', 'place_names']) {
+      // 縁(events)・試す(intents)・評価(appraisals)・場所名の修正(place_names)・スポットの位置の修正(spot_fixes)はアプリでも書く。台帳(actants)と痕跡(traces)はハブから受け取るだけ
+      for (const name of ['events', 'intents', 'appraisals', 'actants', 'traces', 'place_names', 'spot_fixes']) {
         if (!db.objectStoreNames.contains(name)) db.createObjectStore(name, { keyPath: 'id' });
       }
       if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta', { keyPath: 'key' });
@@ -48,7 +48,7 @@ export async function get(name, id) {
 
 // 同期のために、書き込みを知らせる。mtime は同期で新旧を比べる時刻(端末の時計、ミリ秒)。
 // 同期で受け取ったデータを書くときは { silent: true } にして、送り返さないようにする。
-const SYNCED = new Set(['events', 'intents', 'appraisals', 'place_names']);
+const SYNCED = new Set(['events', 'intents', 'appraisals', 'place_names', 'spot_fixes']);
 let changeHook = null;
 export function onChange(fn) { changeHook = fn; }
 function touch(name, values, silent) {

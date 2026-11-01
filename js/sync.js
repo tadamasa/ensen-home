@@ -5,8 +5,9 @@
 // - 台帳(actants)と痕跡(traces)は受け取るだけ
 import * as db from './db.js';
 
-const KINDS = ['events', 'intents', 'appraisals', 'actants', 'traces', 'place_names'];
-const PUSH_KINDS = ['events', 'intents', 'appraisals', 'place_names'];
+const KINDS = ['events', 'intents', 'appraisals', 'actants', 'traces', 'place_names', 'spot_fixes'];
+const PUSH_KINDS = ['events', 'intents', 'appraisals', 'place_names', 'spot_fixes'];
+const APPEND_ONLY = new Set(['events', 'appraisals', 'place_names', 'spot_fixes']); // ハブから返ってきたら届いた印
 const PUSH_CHARS = 3000000; // 1回に送るおおよその大きさ(写真つきの縁があるため)
 let dirty = {}; // 未送信: { "kind|id": mtime }
 let cfg = { url: '', token: '' };
@@ -40,8 +41,8 @@ export async function initSync(opts = {}) {
   const [url, token, saved, lastAt] = await Promise.all([db.getMeta('syncUrl', ''), db.getMeta('syncToken', ''), db.getMeta('syncDirty'), db.getMeta('syncLastAt')]);
   cfg = { url: url || '', token: token || '' };
   if (saved) dirty = saved;
-  // 場所名の修正は、ハブがまだ受け取れない版だと送っても残らない。届くまで(手元に pending が残る間)は毎回送り直す
-  for (const r of await db.getAll('place_names')) if (r.pending) dirty[`place_names|${r.id}`] = r.mtime || 1;
+  // 場所名・スポットの位置の修正は、ハブがまだ受け取れない版だと送っても残らない。届くまで(手元に pending が残る間)は毎回送り直す
+  for (const k of ['place_names', 'spot_fixes']) for (const r of await db.getAll(k)) if (r.pending) dirty[`${k}|${r.id}`] = r.mtime || 1;
   status.state = cfg.url ? 'idle' : 'off';
   status.lastAt = lastAt;
   db.onChange(mark);
@@ -100,7 +101,7 @@ export async function apply(items) {
     if (!it.data) continue;
     const rec = { ...it.data, id: it.id, mtime: it.mtime };
     if (local && local.photoThumb) rec.photoThumb = local.photoThumb;
-    if (it.kind === 'events' || it.kind === 'appraisals' || it.kind === 'place_names') delete dirty[key]; // ハブに届いた
+    if (APPEND_ONLY.has(it.kind)) delete dirty[key]; // ハブに届いた
     await db.put(it.kind, rec, { silent: true });
     changed++;
   }

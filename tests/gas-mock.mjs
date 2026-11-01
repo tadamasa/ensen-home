@@ -58,7 +58,7 @@ function formatDate(d, _tz, f) {
     .replace('HH', pad(d.getHours())).replace('mm', pad(d.getMinutes())).replace('ss', pad(d.getSeconds())).replace('XXX', '+09:00');
 }
 
-export function loadHub() {
+export function loadHub(opts = {}) {
   const ensen = makeBook();
   for (const [n, h] of Object.entries(HEADERS)) ensen.insertSheet(n).appendRow(h);
   ensen.log.length = 0;
@@ -81,18 +81,21 @@ export function loadHub() {
     CacheService: { getScriptCache: () => ({ get: k => cache[k] ?? null, put: (k, v) => { cache[k] = v; } }) },
     ContentService: { createTextOutput: s => ({ text: s, setMimeType() { return this; } }), MimeType: { JSON: 'json' } },
     DriveApp: { getFolderById: () => folder, getFoldersByName: () => ({ hasNext: () => true, next: () => folder }), createFolder: () => folder },
-    UrlFetchApp: { fetch: () => ({ getResponseCode: () => 200, getContentText: () => JSON.stringify({ places: [{ displayName: { text: '近くの喫茶' }, location: { latitude: 35, longitude: 139 } }] }) }) },
+    UrlFetchApp: { fetch: opts.fetch || (() => ({ getResponseCode: () => 200, getContentText: () => JSON.stringify({ places: [{ displayName: { text: '近くの喫茶' }, location: { latitude: 35, longitude: 139 } }] }) })) },
+    Maps: { newGeocoder: () => { const g = { setLanguage: () => g, setRegion: () => g, setBounds: () => g, geocode: q => (opts.geocode ? opts.geocode(q) : { status: 'ZERO_RESULTS', results: [] }) }; return g; } },
+    ScriptApp: { triggers: [], getProjectTriggers() { return this.triggers; }, deleteTrigger(t) { this.triggers = this.triggers.filter(x => x !== t); }, newTrigger(fn) { const self = this; const b = { timeBased: () => b, after: () => b, create: () => { const t = { getHandlerFunction: () => fn }; self.triggers.push(t); return t; } }; return b; } },
     Utilities: {
       getUuid: () => `0000${(++uuid).toString(16).padStart(4, '0')}-1111-2222-3333-444455556666`,
       formatDate,
       base64Decode: s => Buffer.from(s, 'base64'),
       newBlob: (bytes, type, name) => ({ bytes, type, name }),
+      sleep() {},
     },
     Logger: { log() {} },
     Date, Math, JSON, String, Number, Array, Object, isFinite, isNaN,
   };
   vm.createContext(ctx);
-  vm.runInContext(fs.readFileSync(new URL('../hub/Code.gs', import.meta.url), 'utf8'), ctx);
+  vm.runInContext(fs.readFileSync(new URL('../hub/Code.gs', import.meta.url), 'utf8') + '\n' + fs.readFileSync(new URL('../hub/SpotMatch.gs', import.meta.url), 'utf8'), ctx);
   ctx.setup();
   const sheet = n => ensen.getSheetByName(n);
   // 縁泉GASの書き方(appendRow)をまねる
@@ -126,6 +129,7 @@ export function loadHub() {
     addBook,
     rows: n => ensen.sheets.get(n).rows,
     gas,
+    ctx,
     post: body => JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify(body) } }).text),
   };
 }

@@ -5,9 +5,9 @@ import * as gemini from './gemini.js';
 import { exportData, importData } from './backup.js';
 import {
   TYPES, VERBS, ORIGINS, TYPE_KEY, TYPE_ICON, VERB_ICON, VERB_ORDER, VERB_TIPS,
-  esc, uuid, isoLocal, today, isDate, dayOf, timeOf, toInputValue, fromInputValue, shiftMonth, monthCells, dateLabel, gapLabel, autoSeason,
+  esc, uuid, haversine, isoLocal, today, isDate, dayOf, timeOf, toInputValue, fromInputValue, shiftMonth, monthCells, dateLabel, gapLabel, autoSeason,
   findActant, suggestVerb, nearbyPlaces, nameChips, isHomeMove, homeKind, echoOf,
-  frontier, reunions, apprQueue, placeNameFor, yearReview, yearStory, yearsOf, SEASONS, meshBounds, latestWeight, mapPoints, distantCandidates, distantPrompt, parseDistant, parseExif,
+  frontier, reunions, apprQueue, placeNameFor, latestSpotFixes, applySpotFixes, spotSuspects, spotCandidates, yearReview, yearStory, yearsOf, SEASONS, meshBounds, latestWeight, mapPoints, distantCandidates, distantPrompt, parseDistant, parseExif,
 } from './ensen.js';
 
 // ---------- 状態 ----------
@@ -43,12 +43,15 @@ function setTab(tab) {
 const sortTs = (a, b) => String(a.ts).localeCompare(String(b.ts));
 
 async function load() {
-  const [events, intents, appraisals, actants, traces, placeNames] = await Promise.all(['events', 'intents', 'appraisals', 'actants', 'traces', 'place_names'].map(s => db.getAll(s)));
+  const [events, intents, appraisals, actants, traces, placeNames, spotFixes] = await Promise.all(['events', 'intents', 'appraisals', 'actants', 'traces', 'place_names', 'spot_fixes'].map(s => db.getAll(s)));
   state.placeNames = placeNames;
-  state.events = events.sort(sortTs);
+  // スポットの位置の修正は読むときに当てる(元の縁は書き換えない)。怪しいものの検出には元の位置を使う
+  state.spotFixes = latestSpotFixes(spotFixes);
+  state.rawEvents = events.sort(sortTs);
+  state.events = applySpotFixes(state.rawEvents, state.spotFixes);
   state.intents = intents.sort(sortTs);
   state.appraisals = appraisals;
-  state.actants = actants;
+  state.actants = applySpotFixes(actants, state.spotFixes, 'id');
   state.traces = traces.sort(sortTs);
 }
 
@@ -622,44 +625,202 @@ function loadLeaflet() {
   return leafletP;
 }
 let mapObj = null;
+const byId = id => document.getElementById(id);
+const tmIcon = (L, type, cls = '') => L.divIcon({ html: `<div class="tm ${kcls(type)} ${cls}">${glyph(TYPE_ICON[type] || 'i-place', '')}</div>`, className: kcls(type), iconSize: [26, 26], iconAnchor: [13, 13] });
+const meIcon = L => L.divIcon({ html: '<div class="me-dot"></div>', className: '', iconSize: [14, 14], iconAnchor: [7, 7] });
 function lookMap(el) {
   const per = state.map.period;
-  el.innerHTML = `<div class="seg">${[['3m', '3か月'], ['1y', '1年'], ['all', 'すべて']].map(([k, l]) => `<button class="chip${per === k ? ' is-active' : ''}" data-per="${k}">${l}</button>`).join('')}</div>
-    <div class="map-wrap"><div id="map" role="application" aria-label="縁の地図"></div><button class="map-me" id="map-me" aria-label="現在地へ">${glyph('i-pin', '')}</button></div>
-    <div class="legend">${TYPES.map(t => `<button class="chip ${kcls(t)}${state.map.off.has(t) ? ' is-off' : ''}" data-lg="${t}" aria-pressed="${!state.map.off.has(t)}"><i></i>${t}</button>`).join('')}</div>
-    <p class="hint">再訪した場所は、いちばん新しい1点にまとめています。点を押すと、これまでの縁が出ます。</p>
+  const groups = spotSuspects(state.rawEvents, state.spotFixes);
+  const doubt = new Set(groups.flatMap(g => g.items.map(i => i.aid)));
+  const nDoubt = doubt.size;
+  const nFixed = [...state.spotFixes.values()].filter(f => f.status === 'move' || f.status === 'hide').length;
+  const fix = state.map.fix ? spotTarget(state.map.fix, groups) : null;
+  if (state.map.fix && !fix) state.map.fix = null;
+  const fixPanel = fix ? spotFixPanel(fix) : '';
+  el.innerHTML = `<div class="seg">${[['3m', '3か月'], ['1y', '1年'], ['all', 'すべて']].map(([k, l]) => `<button class="chip${per === k ? ' is-active' : ''}" data-per="${k}"${fix ? ' disabled' : ''}>${l}</button>`).join('')}</div>
+    ${!fix && (nDoubt || nFixed) ? `<button class="spot-note" id="spot-check" aria-expanded="${!!state.map.check}"><span>${nDoubt ? `位置の怪しいスポットが <b>${nDoubt}</b> か所あります` : `位置を直したスポット <b>${nFixed}</b> か所`}</span><small>${state.map.check ? 'とじる' : '確かめる'}</small></button>` : ''}
+    <div class="map-wrap${fix ? ' map-wrap--fix' : ''}"><div id="map" role="application" aria-label="${fix ? '置き直す場所を押してください' : '縁の地図'}"></div><button class="map-me" id="map-me" aria-label="現在地へ">${glyph('i-pin', '')}</button></div>
+    ${fixPanel}
+    ${fix ? '' : `<div class="legend">${TYPES.map(t => `<button class="chip ${kcls(t)}${state.map.off.has(t) ? ' is-off' : ''}" data-lg="${t}" aria-pressed="${!state.map.off.has(t)}"><i></i>${t}</button>`).join('')}</div>
+    <p class="hint">再訪した場所は、いちばん新しい1点にまとめています。点を押すと、これまでの縁が出ます。</p>`}
+    ${!fix && state.map.check ? spotList(groups) : ''}
     <p class="credit">地図: 国土地理院 淡色地図(https://maps.gsi.go.jp/development/ichiran.html)</p>`;
   el.querySelectorAll('[data-per]').forEach(b => b.addEventListener('click', () => { state.map.period = b.dataset.per; lookMap(el); }));
   el.querySelectorAll('[data-lg]').forEach(b => b.addEventListener('click', () => { const t = b.dataset.lg; state.map.off.has(t) ? state.map.off.delete(t) : state.map.off.add(t); lookMap(el); }));
+  if (byId('spot-check')) byId('spot-check').addEventListener('click', () => { state.map.check = !state.map.check; lookMap(el); if (state.map.check) setTimeout(() => document.querySelector('.spot-list')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60); });
+  el.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => openSpotFix(el, b.dataset.open)));
+  if (byId('spot-fixed-all')) byId('spot-fixed-all').addEventListener('click', () => { state.map.fixedAll = true; lookMap(el); });
+  el.querySelectorAll('[data-allok]').forEach(b => b.addEventListener('click', async () => {
+    const g = groups.find(x => x.key === b.dataset.allok);
+    if (!g || !confirm(`${g.items.map(i => `「${i.name}」`).join('')}の${g.items.length}か所を、今の位置で正しいことにします。`)) return;
+    for (const it of g.items) await putSpotFix(it, 'ok');
+    await load(); toast(`${g.items.length}か所を確かめました`); lookMap(el);
+  }));
   const from = per === 'all' ? '' : new Date(Date.now() - (per === '3m' ? 92 : 366) * 864e5).toISOString().slice(0, 10);
-  const pts = mapPoints(state.events, { from, types: TYPES.filter(t => !state.map.off.has(t)) });
+  const pts = fix ? [] : mapPoints(state.events, { from, types: TYPES.filter(t => !state.map.off.has(t)) });
   loadLeaflet().then(L => {
     if (!document.getElementById('map')) return;
     if (mapObj) { mapObj.remove(); mapObj = null; }
     const map = mapObj = L.map('map', { zoomControl: false, attributionControl: false });
     L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png', { maxZoom: 18 }).addTo(map);
+    if (fix) { spotFixMap(L, map, el, fix); return; }
     const bounds = [];
     for (const p of pts) {
       const many = p.visits.length > 1;
-      const icon = L.divIcon({ html: `<div class="tm ${kcls(p.type)}${many ? ' tm--many' : ''}">${glyph(TYPE_ICON[p.type] || 'i-place', '')}</div>`, className: kcls(p.type), iconSize: [26, 26], iconAnchor: [13, 13] });
+      const aid = p.visits[0].aid;
+      const doubtful = aid && doubt.has(aid);
+      const icon = tmIcon(L, p.type, `${many ? 'tm--many' : ''}${doubtful ? ' tm--doubt' : ''}`);
       const visits = p.visits.slice(0, 30).map(v => `<div class="visit"><a href="#day/${dayOf(v.ts)}">${esc(dayOf(v.ts).replace(/-/g, '.'))}</a> ${esc(v.verb)}${v.note ? `<br>${esc(v.note.slice(0, 60))}` : ''}</div>`).join('');
-      L.marker([p.lat, p.lng], { icon }).addTo(map).bindPopup(`<b>${esc(p.name)}</b><br><span style="color:#888">${esc(p.type)}${many ? `・${p.visits.length}たび` : ''}</span>${visits}${p.visits.length > 30 ? '<div class="visit">…</div>' : ''}`, { maxWidth: 260 });
+      const tools = aid && p.type === '場所' ? `<div class="pop-tools">${doubtful ? '<span class="pop-doubt">位置が怪しいかもしれません</span>' : p.visits[0].posFix === 'move' ? '<span class="muted">位置を直した場所</span>' : ''}<button class="pop-fix" data-spot="${esc(aid)}">位置を直す</button></div>` : '';
+      L.marker([p.lat, p.lng], { icon }).addTo(map).bindPopup(`<b>${esc(p.name)}</b><br><span style="color:#888">${esc(p.type)}${many ? `・${p.visits.length}たび` : ''}</span>${tools}${visits}${p.visits.length > 30 ? '<div class="visit">…</div>' : ''}`, { maxWidth: 260 });
       bounds.push([p.lat, p.lng]);
     }
+    map.on('popupopen', e => { const b = e.popup.getElement().querySelector('[data-spot]'); if (b) b.addEventListener('click', () => openSpotFix(el, b.dataset.spot)); });
     const gps = form.gps;
-    if (gps) L.marker([gps.lat, gps.lng], { icon: L.divIcon({ html: '<div class="me-dot"></div>', className: '', iconSize: [14, 14], iconAnchor: [7, 7] }), zIndexOffset: 1000 }).addTo(map);
-    if (bounds.length > 1) map.fitBounds(bounds, { padding: [30, 30], maxZoom: 15 });
+    if (gps) L.marker([gps.lat, gps.lng], { icon: meIcon(L), zIndexOffset: 1000 }).addTo(map);
+    if (state.map.view) { map.setView(state.map.view.c, state.map.view.z); state.map.view = null; }
+    else if (bounds.length > 1) map.fitBounds(bounds, { padding: [30, 30], maxZoom: 15 });
     else if (bounds.length === 1) map.setView(bounds[0], 13);
     else map.setView([36.2, 138.2], 5);
-    document.getElementById('map-me').addEventListener('click', () => {
-      if (!navigator.geolocation) return toast('現在地に対応していません');
-      navigator.geolocation.getCurrentPosition(pos => {
-        form.gps = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        L.marker([form.gps.lat, form.gps.lng], { icon: L.divIcon({ html: '<div class="me-dot"></div>', className: '', iconSize: [14, 14], iconAnchor: [7, 7] }) }).addTo(map);
-        map.setView([form.gps.lat, form.gps.lng], 14);
-      }, () => toast('現在地を取得できませんでした'), { enableHighAccuracy: true, timeout: 8000 });
-    });
+    bindMapMe(L, map);
   }).catch(e => { const m = document.getElementById('map'); if (m) m.innerHTML = `<p class="empty-line">${esc(e.message)}</p>`; });
+}
+function bindMapMe(L, map) {
+  document.getElementById('map-me').addEventListener('click', () => {
+    if (!navigator.geolocation) return toast('現在地に対応していません');
+    navigator.geolocation.getCurrentPosition(pos => {
+      form.gps = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      L.marker([form.gps.lat, form.gps.lng], { icon: meIcon(L) }).addTo(map);
+      map.setView([form.gps.lat, form.gps.lng], 14);
+    }, () => toast('現在地を取得できませんでした'), { enableHighAccuracy: true, timeout: 8000 });
+  });
+}
+
+// ---- スポットの位置を直す ----
+// 地図を押す/候補を押す → 「ここにする」。今の位置のまま「正しい」、どこか分からなければ「位置不明」。
+// 書くのは spot_fixes への1行の追記だけ(縁泉の events は書き換えない)
+const SPOT_REASON = {
+  anchor: g => `よく来る「${g.anchor}」の記録点のすぐそばに乗っています。そこから後でチェックインした跡かもしれません。`,
+  cluster: g => `別々の${g.items.length}か所が40m以内に重なっています。どこか一か所から、まとめてチェックインした跡かもしれません。`,
+  spread: g => `同じ場所の記録どうしが${g.far >= 1000 ? `${(g.far / 1000).toFixed(1)}km` : `${g.far}m`}離れています。`,
+};
+function spotTarget(aid, groups) {
+  const g = groups.find(x => x.items.some(i => i.aid === aid));
+  if (g) return { ...g.items.find(i => i.aid === aid), group: g };
+  const evs = state.rawEvents.filter(e => e.aid === aid && e.type === '場所' && e.lat != null && e.lat !== '');
+  if (!evs.length) return null;
+  const top = evs[evs.length - 1];
+  return { aid, name: top.name || top.place, events: evs, lat: Number(top.lat), lng: Number(top.lng), group: null };
+}
+function spotFixPanel(fix) {
+  const cur = state.spotFixes.get(fix.aid);
+  const cands = state.map.cands = spotCandidates(fix, state.traces, state.placeNames);
+  const first = dayOf(fix.events[0].ts), last = dayOf(fix.events[fix.events.length - 1].ts);
+  const when = (first === last ? first : `${first}〜${last}`).replace(/-/g, '.');
+  const pick = state.map.pick;
+  const away = pick ? haversine(fix.lat, fix.lng, pick.lat, pick.lng) : 0;
+  return `<div class="card spot-fix" role="region" aria-label="位置を直す">
+    <div class="spot-fix__head"><b>${esc(fix.name)}</b><span class="muted small">${esc(when)}${fix.events.length > 1 ? `・${fix.events.length}回` : ''}</span></div>
+    <p class="small">${fix.group ? esc(SPOT_REASON[fix.group.reason](fix.group)) + '<br>' : ''}${cur ? `<span class="muted">${cur.status === 'move' ? (cur.source === 'auto' ? '店の名前で地図を引いて、自動で置き直した位置を表示しています。' : '直した位置を表示しています。') : cur.status === 'hide' ? '今は位置不明にしています。' : '確かめ済みです。'}</span><br>` : ''}地図を押すと、そこに置き直せます。</p>
+    ${cands.length ? `<div class="spot-cands"><span class="chips-label">置き直す先の候補(その日に写真を撮った場所・ほかの回の位置)</span>${cands.map((c, i) => `<button class="chip${pick && pick.cand === i ? ' is-active' : ''}" data-cand="${i}"><span class="cand-no">${i + 1}</span>${esc(c.label)}</button>`).join('')}</div>` : `<p class="small muted">この日の写真の撮影地は見つかりませんでした。</p>`}
+    <p class="small spot-fix__pick" aria-live="polite">${pick ? `今の点から <b>${away >= 1000 ? `${(away / 1000).toFixed(1)}km` : `${Math.round(away)}m`}</b> 離れた所を選んでいます。` : ''}</p>
+    <div class="spot-fix__acts">
+      <button class="btn btn--prominent btn--small" id="sf-move"${pick ? '' : ' disabled'}>ここにする</button>
+      ${cur && cur.status === 'ok' ? '' : '<button class="btn btn--tinted btn--small" id="sf-ok">今の位置で正しい</button>'}
+      ${cur && cur.status === 'hide' ? '' : '<button class="btn btn--plain btn--small" id="sf-hide">位置不明にする</button>'}
+      ${cur ? '<button class="btn btn--plain btn--small" id="sf-undo">元の位置に戻す</button>' : ''}
+      <button class="btn btn--plain btn--small" id="sf-cancel">やめる</button>
+    </div>
+  </div>`;
+}
+function spotFixMap(L, map, el, fix) {
+  const cur = state.spotFixes.get(fix.aid);
+  const bounds = [];
+  // 記録されている位置(怪しい点)
+  for (const e of fix.events) {
+    if (e.lat == null || e.lat === '') continue;
+    L.marker([Number(e.lat), Number(e.lng)], { icon: tmIcon(L, '場所', 'tm--doubt'), interactive: false }).addTo(map);
+    bounds.push([Number(e.lat), Number(e.lng)]);
+  }
+  if (cur && cur.status === 'move') { L.marker([cur.lat, cur.lng], { icon: tmIcon(L, '場所', 'tm--fixed'), interactive: false }).addTo(map); bounds.push([cur.lat, cur.lng]); }
+  (state.map.cands || []).forEach((c, i) => {
+    L.marker([c.lat, c.lng], { icon: L.divIcon({ html: `<div class="cand-dot">${i + 1}</div>`, className: '', iconSize: [22, 22], iconAnchor: [11, 11] }) }).addTo(map).on('click', () => setPick(el, { lat: c.lat, lng: c.lng, cand: i }));
+    bounds.push([c.lat, c.lng]);
+  });
+  const pick = state.map.pick;
+  if (pick) {
+    const m = L.marker([pick.lat, pick.lng], { icon: L.divIcon({ html: '<div class="pick-pin"></div>', className: '', iconSize: [30, 30], iconAnchor: [15, 28] }), draggable: true, zIndexOffset: 1000 }).addTo(map);
+    m.on('dragend', () => { const ll = m.getLatLng(); setPick(el, { lat: ll.lat, lng: ll.lng }); });
+    bounds.push([pick.lat, pick.lng]);
+  }
+  if (state.map.view) { map.setView(state.map.view.c, state.map.view.z); state.map.view = null; }
+  else if (bounds.length > 1) map.fitBounds(bounds, { padding: [40, 40], maxZoom: 16 });
+  else if (bounds.length === 1) map.setView(bounds[0], 15);
+  map.on('click', e => setPick(el, { lat: e.latlng.lat, lng: e.latlng.lng }));
+  bindMapMe(L, map);
+  el.querySelectorAll('[data-cand]').forEach(b => b.addEventListener('click', () => { const c = state.map.cands[Number(b.dataset.cand)]; setPick(el, { lat: c.lat, lng: c.lng, cand: Number(b.dataset.cand) }, true); }));
+  const done = async (status, msg) => {
+    await putSpotFix(fix, status, state.map.pick);
+    await load();
+    toast(msg);
+    state.map.pick = null;
+    // 確かめている途中なら、次の怪しいスポットへ
+    const next = state.map.check ? sortSpotGroups(spotSuspects(state.rawEvents, state.spotFixes))[0] : null;
+    state.map.fix = next ? next.items[0].aid : null;
+    lookMap(el);
+  };
+  byId('sf-move').addEventListener('click', () => state.map.pick && done('move', `「${fix.name}」を置き直しました`));
+  if (byId('sf-ok')) byId('sf-ok').addEventListener('click', () => done('ok', `「${fix.name}」は今の位置のままにします`));
+  if (byId('sf-hide')) byId('sf-hide').addEventListener('click', () => done('hide', `「${fix.name}」を位置不明にしました(地図には出ません)`));
+  if (byId('sf-undo')) byId('sf-undo').addEventListener('click', () => done('undo', `「${fix.name}」を元の位置に戻しました`));
+  byId('sf-cancel').addEventListener('click', () => { state.map.fix = null; state.map.pick = null; lookMap(el); });
+}
+function setPick(el, pick, pan) {
+  // 地図の見え方を保ったまま描き直す
+  if (mapObj && !pan) state.map.view = { c: mapObj.getCenter(), z: mapObj.getZoom() };
+  else if (pan) state.map.view = { c: [pick.lat, pick.lng], z: Math.max(15, mapObj ? mapObj.getZoom() : 15) };
+  state.map.pick = pick;
+  lookMap(el);
+}
+function openSpotFix(el, aid) {
+  state.map.fix = aid; state.map.pick = null; state.map.view = null;
+  lookMap(el);
+  setTimeout(() => document.querySelector('.map-wrap')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+}
+async function putSpotFix(item, status, pick) {
+  const last = item.events[item.events.length - 1];
+  await db.put('spot_fixes', {
+    id: uuid(), ts: isoLocal(), aid: item.aid, event_id: last ? last.id : '',
+    lat: status === 'move' ? Number(pick.lat.toFixed(6)) : null, lng: status === 'move' ? Number(pick.lng.toFixed(6)) : null,
+    status, source: 'home', mtime: Date.now(), pending: true,
+  });
+}
+const SPOT_ORDER = { anchor: 0, cluster: 1, spread: 2 };
+const sortSpotGroups = groups => groups.slice().sort((a, b) => SPOT_ORDER[a.reason] - SPOT_ORDER[b.reason] || b.items.length - a.items.length);
+// 直したもの(位置不明にしたものは地図に出ないので、ここから元に戻せるように)
+function spotFixedList() {
+  const name = aid => { const e = state.rawEvents.find(x => x.aid === aid); return e ? (e.name || e.place) : aid; };
+  const rows = [...state.spotFixes.values()].filter(f => f.status === 'move' || f.status === 'hide').sort((a, b) => String(b.ts).localeCompare(String(a.ts)));
+  if (!rows.length) return '';
+  const shown = state.map.fixedAll ? rows : rows.slice(0, 40);
+  const auto = rows.filter(f => f.source === 'auto').length;
+  return `<div class="card spot-group"><h3>直したスポット ${rows.length}か所${auto ? `(うち店の名前で自動 ${auto})` : ''}</h3>
+    ${shown.map(f => `<button class="spot-row" data-open="${esc(f.aid)}"><span><b>${esc(name(f.aid))}</b><small>${f.status === 'hide' ? '位置不明' : f.source === 'auto' ? '店の名前で自動で置き直した' : '置き直した'}・${esc(dayOf(f.ts).replace(/-/g, '.'))}</small></span><span class="spot-row__go">見る</span></button>`).join('')}
+    ${rows.length > shown.length ? `<button class="btn btn--plain btn--small" id="spot-fixed-all">ほか${rows.length - shown.length}か所も見る</button>` : ''}
+  </div>`;
+}
+function spotList(groups) {
+  const title = { anchor: g => `よく来る「${g.anchor}」のそばに重なっている`, cluster: g => `40m以内に${g.items.length}か所が重なっている`, spread: () => '同じ場所の記録が離れている' };
+  const gs = sortSpotGroups(groups);
+  return `<section class="spot-list" aria-label="位置の怪しいスポット">
+    <p class="hint">Swarmから取り込んだ記録の位置は、チェックインした時のiPhoneの位置です。家などから後でチェックインした場所は、そこに重なって見えます。押して確かめてください。</p>
+    ${gs.map(g => `<div class="card spot-group">
+      <h3>${esc(title[g.reason](g))}</h3>
+      ${g.items.map(i => `<button class="spot-row" data-open="${esc(i.aid)}"><span><b>${esc(i.name)}</b><small>${esc(dayOf(i.events[0].ts).replace(/-/g, '.'))}${i.events.length > 1 ? ` ほか${i.events.length - 1}回` : ''}</small></span><span class="spot-row__go">直す</span></button>`).join('')}
+      ${g.items.length > 1 ? `<button class="btn btn--plain btn--small" data-allok="${esc(g.key)}">この${g.items.length}か所はどれも正しい</button>` : ''}
+    </div>`).join('')}
+    ${spotFixedList()}
+  </section>`;
 }
 
 // ---- 初出の川 ----
