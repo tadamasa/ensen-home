@@ -278,3 +278,15 @@ svg.ic { width: 24px; height: 24px; stroke: currentColor; fill: none; stroke-wid
 .story p { font-size: 16px; line-height: 1.95; margin: 0 0 var(--space-3); color: var(--color-label); text-align: justify; }
 .story strong { font-weight: 600; color: var(--color-accent); }
 .story .actions { margin-top: var(--space-6); }
+
+/* 一年をめぐる */
+.year-story { margin-top: var(--space-2); }
+.year-story p { font-size: 16px; line-height: 1.9; margin: var(--space-2) 0; color: var(--color-label); }
+.sec { font-size: 15px; font-weight: 600; color: var(--color-label-secondary); margin: var(--space-6) var(--space-4) var(--space-2); letter-spacing: .03em; }
+.strata { display: block; width: 100%; height: auto; margin: var(--space-2) 0; }
+.strata rect { fill: var(--k); }
+.strata .strata__prev { opacity: .45; }
+.strata__label { font-size: 12px; fill: var(--color-label-secondary); }
+.legend--static { padding: 0 0 var(--space-2); }
+.legend--static .chip { pointer-events: none; }
+.map-wrap--year { height: min(42vh, 340px); }

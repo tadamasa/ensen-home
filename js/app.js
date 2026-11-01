@@ -7,7 +7,7 @@ import {
   TYPES, VERBS, ORIGINS, TYPE_KEY, TYPE_ICON, VERB_ICON, VERB_ORDER, VERB_TIPS,
   esc, uuid, isoLocal, today, isDate, dayOf, timeOf, toInputValue, fromInputValue, shiftMonth, monthCells, dateLabel, gapLabel, autoSeason,
   findActant, suggestVerb, nearbyPlaces, nameChips, isHomeMove, homeKind, echoOf,
-  frontier, reunions, apprQueue, latestWeight, mapPoints, distantCandidates, distantPrompt, parseDistant, parseExif,
+  frontier, reunions, apprQueue, yearReview, yearStory, yearsOf, SEASONS, meshBounds, latestWeight, mapPoints, distantCandidates, distantPrompt, parseDistant, parseExif,
 } from './ensen.js';
 
 // ---------- 状態 ----------
@@ -464,7 +464,7 @@ function paintIntentForm() {
 // ============================================================
 // 眺める
 // ============================================================
-const LOOKS = [['map', '縁の地図'], ['first', '初出の川'], ['reunion', '再会の川'], ['fog', '霧の中へ'], ['appr', '評価の間'], ['pair', '遠い対']];
+const LOOKS = [['map', '縁の地図'], ['first', '初出の川'], ['reunion', '再会の川'], ['fog', '霧の中へ'], ['appr', '評価の間'], ['pair', '遠い対'], ['year', '一年をめぐる']];
 function renderLook(arg) {
   if (LOOKS.some(l => l[0] === arg)) state.look = arg;
   setTab('look');
@@ -476,7 +476,7 @@ function renderLook(arg) {
     el.innerHTML = `<p class="empty-line">${sync.enabled() ? '縁泉から受け取っています…' : '設定で縁泉ハブにつなぐと、これまでの縁がここに現れます。'}</p>`;
     return;
   }
-  ({ map: lookMap, first: lookFirst, reunion: lookReunion, fog: lookFog, appr: lookAppr, pair: lookPair })[state.look](el);
+  ({ map: lookMap, first: lookFirst, reunion: lookReunion, fog: lookFog, appr: lookAppr, pair: lookPair, year: lookYear })[state.look](el);
 }
 
 // ---- 縁の地図(国土地理院の淡色地図。Leaflet は使うときだけ読む) ----
@@ -647,6 +647,53 @@ async function lookPair(el) {
   });
 }
 
+// ---- 一年をめぐる(点数ではなく、層・土地・弧の形で去年と並べる) ----
+function strataSvg(r) {
+  const W = 300, rowH = 34, left = 26;
+  const tot = (y, s) => TYPES.reduce((n, t) => n + r.strata[y][s][t], 0);
+  const max = Math.max(1, ...SEASONS.flatMap(s => [tot(r.year, s), tot(r.prev, s)]));
+  const band = (y, s, top, h, cls) => {
+    let x = left;
+    return TYPES.map(t => { const w = (r.strata[y][s][t] / max) * (W - left); const out = w > 0 ? `<rect class="${kcls(t)} ${cls}" x="${x.toFixed(1)}" y="${top}" width="${w.toFixed(1)}" height="${h}" rx="2"/>` : ''; x += w; return out; }).join('');
+  };
+  const rows = SEASONS.map((s, i) => { const y0 = i * rowH + 4; return `<text x="0" y="${y0 + 12}" class="strata__label">${s}</text>${band(r.year, s, y0, 14, 'strata__now')}${band(r.prev, s, y0 + 17, 7, 'strata__prev')}`; }).join('');
+  return `<svg class="strata" viewBox="0 0 ${W} ${SEASONS.length * rowH + 4}" role="img" aria-label="季節ごとの初出の層。太い帯が${r.year}年、細い帯が${r.prev}年">${rows}</svg>`;
+}
+function lookYear(el) {
+  const years = yearsOf(state.events);
+  if (!state.year || !years.includes(state.year)) state.year = years[0];
+  const r = yearReview(state, state.year);
+  const story = yearStory(r);
+  const { cleared, open } = r.challenge;
+  const iRow = (i, sub) => `<div class="list-row ${kcls(i.type)}">${i.type ? glyph(TYPE_ICON[i.type]) : '<span class="glyph"></span>'}<div class="list-row__main"><div class="list-row__title">${esc(i.what)}</div><div class="list-row__sub">${sub}</div></div></div>`;
+  el.innerHTML = `<div class="seg">${years.slice(0, 6).map(y => `<button class="chip${y === state.year ? ' is-active' : ''}" data-year="${y}">${y}年</button>`).join('')}</div>
+    <div class="card year-story">${story.map(t => `<p>${esc(t)}</p>`).join('')}</div>
+    <h3 class="sec">挑戦 ─ 霧の中へ置き、晴れたもの</h3>
+    <div class="card">${cleared.map(i => iRow(i, `<a href="#day/${i.clearedOn}">${esc(i.clearedOn.replace(/-/g, '.'))}</a> に晴れた`)).join('')}${open.map(i => iRow(i, `${esc(dayOf(i.ts).replace(/-/g, '.'))} に置いた・まだ霧の中`)).join('') || (cleared.length ? '' : '<p class="empty-line">この年に置いた試みはありません。</p>')}</div>
+    <h3 class="sec">広がり ─ 初めて出会ったものの層</h3>
+    <div class="card">${strataSvg(r)}<div class="legend legend--static">${TYPES.map(t => `<span class="chip ${kcls(t)}"><i></i>${t}</span>`).join('')}</div><p class="hint" style="margin:0">太い帯が${r.year}年、細い帯が${r.prev}年。帯の長さは、その季節に初めて出会ったものの多さです。</p></div>
+    <h3 class="sec">広がり ─ 初めて足を踏み入れた土地</h3>
+    <div class="map-wrap map-wrap--year"><div id="map" role="application" aria-label="${r.year}年に初めて踏んだ土地"></div></div>
+    <p class="hint">濃い四角が${r.year}年に初めて縁を結んだ土地(約1km四方)、薄い四角はそれより前から知っていた土地です。</p>
+    <h3 class="sec">深まり ─ この年に架かった再会の弧</h3>
+    ${(() => { const dRow = a => `<div class="list-row ${kcls(a.type)}">${glyph(TYPE_ICON[a.type] || 'i-place')}<div class="list-row__main"><div class="list-row__title">${esc(a.name)}</div><div class="list-row__sub">${a.gap >= 2 ? `${esc(gapLabel(a.from, a.to))}の再会` : '続けて結んだ'}${a.times > 1 ? `・この年に${a.times}たび` : ''}</div></div></div>`; return `<div class="card">${r.deepen.slice(0, 8).map(dRow).join('') || '<p class="empty-line">この年はまだ弧が架かっていません。</p>'}</div>${r.deepen.length > 8 ? `<details class="fold"><summary>ほかの再会</summary><div class="fold__body"><div class="card">${r.deepen.slice(8, 60).map(dRow).join('')}</div></div></details>` : ''}`; })()}
+    <p class="credit">地図: 国土地理院 淡色地図(https://maps.gsi.go.jp/development/ichiran.html)</p>`;
+  el.querySelectorAll('[data-year]').forEach(b => b.addEventListener('click', () => { state.year = b.dataset.year; lookYear(el); }));
+  loadLeaflet().then(L => {
+    if (!document.getElementById('map')) return;
+    if (mapObj) { mapObj.remove(); mapObj = null; }
+    const map = mapObj = L.map('map', { zoomControl: false, attributionControl: false });
+    L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png', { maxZoom: 18 }).addTo(map);
+    const accent = getComputedStyle(document.documentElement).getPropertyValue('--color-accent').trim() || '#3E8E7E';
+    for (const c of r.land.before) L.rectangle(meshBounds(c.key), { stroke: false, fillColor: '#8a8f8c', fillOpacity: 0.28 }).addTo(map);
+    for (const c of r.land.newY) L.rectangle(meshBounds(c.key), { color: accent, weight: 1, fillColor: accent, fillOpacity: 0.6 }).addTo(map).bindPopup(`<b>${esc(c.label || '')}</b><br><a href="#day/${c.first}">${esc(c.first.replace(/-/g, '.'))}</a> に初めて`);
+    const pts = (r.land.newY.length ? r.land.newY.concat(r.land.before) : r.land.cells).map(c => [c.lat, c.lng]);
+    if (pts.length > 1) map.fitBounds(pts, { padding: [24, 24], maxZoom: 14 });
+    else if (pts.length === 1) map.setView(pts[0], 13);
+    else map.setView([36.2, 138.2], 5);
+  }).catch(e => { const m = document.getElementById('map'); if (m) m.innerHTML = `<p class="empty-line">${esc(e.message)}</p>`; });
+}
+
 // ============================================================
 // 設定
 // ============================================================
@@ -757,7 +804,7 @@ async function route() {
   const [name, arg, arg2] = location.hash.replace(/^#/, '').split('/').map(x => (x ? decodeURIComponent(x) : ''));
   if (name !== 'day') window.scrollTo(0, 0);
   watchSync(null);
-  if (mapObj && !(name === 'look' && (arg || state.look) === 'map')) { mapObj.remove(); mapObj = null; }
+  if (mapObj && !(name === 'look' && ['map', 'year'].includes(arg || state.look))) { mapObj.remove(); mapObj = null; }
   switch (name) {
     case 'record': return renderRecord(arg, arg2);
     case 'look': return renderLook(arg);

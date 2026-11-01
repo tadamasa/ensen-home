@@ -67,3 +67,35 @@ test('日時と暦', () => {
   assert.equal(nearbyPlaces(acts, 35.001, 139.0)[0].dist, 111);
   assert.deepEqual(nameChips(acts, '人').recent.map(a => a.id), ['a2']);
 });
+
+import { yearReview, yearStory, meshOf, seasonOf } from '../js/ensen.js';
+test('一年をめぐる: 層・土地・挑戦・深まり', () => {
+  const actants = [
+    { id: 'a1', type: '場所', name: '喫茶', first_seen: '2026-04-03' },
+    { id: 'a2', type: '人', name: '恩師', first_seen: '2024-05-01' },
+    { id: 'a3', type: '食', name: '蕎麦', first_seen: '2025-07-10' },
+  ];
+  const events = [
+    { id: 'e1', aid: 'a1', type: '場所', name: '喫茶', ts: '2026-04-03T12:00', lat: 35.0, lng: 139.0, place: '路地' },
+    { id: 'e2', aid: 'a2', type: '人', name: '恩師', ts: '2024-05-01T12:00', lat: 35.0, lng: 139.0 },
+    { id: 'e3', aid: 'a2', type: '人', name: '恩師', ts: '2026-06-01T12:00', lat: 35.5, lng: 139.5, place: '遠い町' },
+    { id: 'e4', aid: 'a3', type: '食', name: '蕎麦', ts: '2025-07-10T12:00', lat: 35.01, lng: 139.0 },
+    { id: 'h', ts: '2026-01-01T08:00', tags: '自宅,出発', lat: 40, lng: 140 },
+  ];
+  const intents = [{ id: 'i1', ts: '2026-03-01T00:00', what: '品書きの一番上', status: 'fulfilled', fulfilled_event_id: 'e1' }, { id: 'i2', ts: '2026-05-01T00:00', what: '山', status: 'open' }];
+  const r = yearReview({ events, intents, actants }, 2026);
+  assert.equal(seasonOf('2026-04-03'), '春');
+  assert.equal(r.strata['2026']['春']['場所'], 1);
+  assert.equal(r.typeTotal['2025']['食'], 1);
+  assert.equal(r.challenge.placed.length, 2);
+  assert.equal(r.challenge.cleared[0].clearedOn, '2026-04-03');
+  assert.equal(r.deepen[0].name, '恩師');
+  assert.ok(r.deepen[0].gap > 700);
+  assert.ok(!r.land.cells.some(c => c.key === meshOf(40, 140)), '自宅の出入りは土地に入れない');
+  assert.equal(r.land.newY.length, 1); // 喫茶は2024年に踏んだ区画と同じ
+  assert.equal(r.land.farthest.label, '遠い町');
+  const s = yearStory(r).join('');
+  assert.match(s, /霧の中へ2つの試みを置き、1つが晴れました/);
+  assert.match(s, /遠い町/);
+  assert.match(s, /恩師、2年ぶり/);
+});

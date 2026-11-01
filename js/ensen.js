@@ -319,3 +319,113 @@ function parseTiff(dv, tiff) {
   }
   return out;
 }
+
+// ---------- 一年をめぐる ----------
+// 点数は出さない。その年と前の年を、層・土地・弧の「形」で並べ、語りにする。
+export const SEASONS = ['春', '夏', '秋', '冬'];
+export const seasonOf = d => { const m = Number(String(d).slice(5, 7)); return m >= 3 && m <= 5 ? '春' : m >= 6 && m <= 8 ? '夏' : m >= 9 && m <= 11 ? '秋' : '冬'; };
+// 約1km四方の区画(標準地域メッシュ3次と同じ刻み: 緯度30秒・経度45秒)
+export const meshOf = (lat, lng) => `${Math.floor(Number(lat) * 120)}_${Math.floor(Number(lng) * 80)}`;
+export const meshBounds = key => { const [a, b] = key.split('_').map(Number); return [[a / 120, b / 80], [(a + 1) / 120, (b + 1) / 80]]; };
+
+export function yearsOf(events) {
+  return [...new Set(events.map(e => dayOf(e.ts).slice(0, 4)).filter(y => /^\d{4}$/.test(y)))].sort().reverse();
+}
+
+export function yearReview({ events = [], intents = [], actants = [] }, year) {
+  const Y = String(year), P = String(Number(year) - 1);
+  const yr = d => String(d).slice(0, 4);
+  const evs = events.filter(e => !isHomeMove(e));
+  // 広がり(種類): 初めて出会ったものの層
+  const blank = () => Object.fromEntries(SEASONS.map(s => [s, Object.fromEntries(TYPES.map(t => [t, 0]))]));
+  const strata = { [Y]: blank(), [P]: blank() };
+  const typeTotal = { [Y]: Object.fromEntries(TYPES.map(t => [t, 0])), [P]: Object.fromEntries(TYPES.map(t => [t, 0])) };
+  const firstsY = [];
+  for (const a of frontier(actants, evs, 'old')) {
+    const y = yr(a.first);
+    if (!strata[y] || !TYPES.includes(a.type)) continue;
+    strata[y][seasonOf(a.first)][a.type]++;
+    typeTotal[y][a.type]++;
+    if (y === Y) firstsY.push(a);
+  }
+  // 広がり(土地): 区画ごとの初めての日
+  const cells = {};
+  for (const e of evs) {
+    if (!hasPos(e)) continue;
+    const k = meshOf(e.lat, e.lng), d = dayOf(e.ts);
+    if (!cells[k] || d < cells[k].first) cells[k] = { key: k, first: d, lat: Number(e.lat), lng: Number(e.lng), label: e.place || e.name || '' };
+  }
+  const all = Object.values(cells);
+  const before = all.filter(c => c.first < `${Y}-01-01`);
+  const newY = all.filter(c => yr(c.first) === Y);
+  const newP = all.filter(c => yr(c.first) === P);
+  const base = before.length ? before : all;
+  const med = arr => { const s = [...arr].sort((a, b) => a - b); return s.length ? s[Math.floor(s.length / 2)] : 0; };
+  const center = { lat: med(base.map(c => c.lat)), lng: med(base.map(c => c.lng)) };
+  let farthest = null;
+  for (const c of newY) { const dist = haversine(center.lat, center.lng, c.lat, c.lng); if (!farthest || dist > farthest.dist) farthest = { ...c, dist: Math.round(dist) }; }
+  // 挑戦: 霧の中へ置いた試みと、晴れた試み
+  const evById = Object.fromEntries(events.map(e => [e.id, e]));
+  const placed = intents.filter(i => yr(dayOf(i.ts)) === Y);
+  const cleared = intents.filter(i => i.status === 'fulfilled').map(i => ({ ...i, clearedOn: dayOf((evById[i.fulfilled_event_id] || {}).ts || i.ts) })).filter(i => yr(i.clearedOn) === Y).sort((a, b) => a.clearedOn.localeCompare(b.clearedOn));
+  const placedP = intents.filter(i => yr(dayOf(i.ts)) === P).length;
+  // 深まり: その年に架かった再会の弧(前に結んだことのある相手と、その年にもう一度)
+  const byAid = {};
+  for (const e of evs) if (e.aid) (byAid[e.aid] = byAid[e.aid] || { aid: e.aid, name: e.name, type: e.type, days: [] }).days.push(dayOf(e.ts));
+  const deepen = y => Object.values(byAid).map(a => {
+    const days = [...new Set(a.days)].sort();
+    let times = 0, gap = 0, from = '', to = '';
+    for (let i = 1; i < days.length; i++) {
+      if (yr(days[i]) !== y) continue;
+      times++;
+      const g = (new Date(days[i]) - new Date(days[i - 1])) / 864e5;
+      if (g > gap) { gap = g; from = days[i - 1]; to = days[i]; }
+    }
+    return { ...a, days, times, gap: Math.round(gap), from, to };
+  }).filter(a => a.times > 0).sort((a, b) => b.gap - a.gap || b.times - a.times);
+  const reY = deepen(Y);
+  return {
+    year: Y, prev: P, strata, typeTotal, firstsY,
+    land: { cells: all, before, newY, newPCount: newP.length, center, farthest },
+    challenge: { placed, cleared, open: placed.filter(i => (i.status || 'open') === 'open'), placedP },
+    deepen: reY, deepenPCount: deepen(P).length,
+    hasPrev: TYPES.some(t => typeTotal[P][t] > 0) || newP.length > 0,
+  };
+}
+
+// 一年の語り。数を競わせず、去年との違いを言葉の傾きで伝える
+export function yearStory(r) {
+  const out = [];
+  const { placed, cleared } = r.challenge;
+  if (placed.length) {
+    out.push(`この一年、霧の中へ${placed.length}つの試みを置き、${cleared.length ? `${cleared.length}つが晴れました。` : 'まだどれも霧の中にあります。'}`);
+    if (cleared.length) out.push(`最初に晴れたのは「${cleared[0].what}」、${Number(cleared[0].clearedOn.slice(5, 7))}月のことでした。`);
+  } else if (cleared.length) out.push(`この一年、前から霧の中にあった試みが${cleared.length}つ晴れました。`);
+  else out.push('この一年、霧の中に置いた試みはありませんでした。');
+
+  const tY = r.typeTotal[r.year], tP = r.typeTotal[r.prev];
+  const sumY = TYPES.reduce((s, t) => s + tY[t], 0), sumP = TYPES.reduce((s, t) => s + tP[t], 0);
+  if (sumY) {
+    const rank = TYPES.filter(t => tY[t] > 0).sort((a, b) => tY[b] - tY[a]);
+    const thin = TYPES.filter(t => tY[t] <= sumY * 0.08);
+    out.push(`初めて出会ったものは、${rank.slice(0, 2).join('と')}の層が厚い一年でした。${thin.length ? `${thin.join('・')}の層は薄めです。` : ''}`);
+    if (sumP >= 5) {
+      const grew = TYPES.filter(t => tY[t] >= tP[t] * 1.5 && tY[t] - tP[t] >= 3);
+      const shrank = TYPES.filter(t => tY[t] * 1.5 <= tP[t] && tP[t] - tY[t] >= 3);
+      if (grew.length || shrank.length) out.push(`去年と比べると、${[grew.length ? `${grew.join('・')}の層が厚くなり` : '', shrank.length ? `${shrank.join('・')}の層が細くなりました` : ''].filter(Boolean).join('、')}${shrank.length ? '' : 'ました'}。`);
+      else out.push('去年と比べて、層の厚みの配分はあまり変わっていません。');
+    } else out.push('去年の層はまだ薄く、比べられるのはこれからです。');
+  } else out.push('この一年、初めて出会ったものはありませんでした。戻っていく縁の多い年だったのかもしれません。');
+
+  const ny = r.land.newY.length, np = r.land.newPCount;
+  if (ny) {
+    const cmp = !r.hasPrev || !np ? '' : ny >= np * 1.3 ? '去年より広がりました' : ny * 1.3 <= np ? '去年より少し落ち着きました' : '去年と同じくらいの広がりでした';
+    out.push(`初めて足を踏み入れた土地は${cmp ? `、${cmp}` : 'が地図に滲んでいます'}。${r.land.farthest && r.land.farthest.dist >= 5000 && r.land.farthest.label ? `いちばん遠くへ伸びた線の先は、${r.land.farthest.label}。` : ''}`);
+  } else out.push('この一年、地図の上では、なじみの土地の内側で過ごしました。');
+
+  if (r.deepen.length) {
+    const d = r.deepen[0];
+    out.push(`再会の弧は${r.deepen.length}の名前に架かりました。${d.gap >= 30 ? `いちばん間を置いた再会は${d.name}、${gapLabel(d.from, d.to)}でした。` : ''}`);
+  } else out.push('この一年、再会の弧はまだ架かっていません。');
+  return out;
+}
