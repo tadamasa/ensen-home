@@ -2,6 +2,7 @@ import { STORY, STORY_TITLE, STORY_LEAD } from './story.js';
 import * as db from './db.js';
 import * as sync from './sync.js';
 import * as gemini from './gemini.js';
+import * as places from './places.js';
 import { exportData, importData } from './backup.js';
 import {
   TYPES, VERBS, ORIGINS, TYPE_KEY, TYPE_ICON, VERB_ICON, VERB_ORDER, VERB_TIPS,
@@ -368,7 +369,7 @@ async function revGeocode(lat, lng) {
 function poiCenter() { return form.poiFrom || curPos(); }
 async function loadPoi(q = '') {
   const p = poiCenter();
-  if (p.lat == null || !sync.enabled()) return;
+  if (p.lat == null) return;
   const slot = q ? 'found' : 'poi';
   const key = `${p.lat.toFixed(3)},${p.lng.toFixed(3)},${q ? `q:${q}` : form.poiRadius}`;
   if (form[slot + 'Key'] === key) return;
@@ -409,7 +410,14 @@ async function loadPoi(q = '') {
       if (osmGot.length) { try { localStorage.setItem(memo, JSON.stringify({ at: Date.now(), list: mergePoiList(osmGot) })); } catch { /* 満杯なら覚えない */ } }
     });
   }
-  jobs.push(sync.ask('poi', { lat: p.lat, lng: p.lng, radius: form.poiRadius, q, osm: false })
+  // Google: 端末にキーがあれば端末から直接(速い・理由がそのまま見える)。なければハブに尋ねる
+  const placesKey = await db.getMeta('placesKey', '');
+  if (stale()) return;
+  if (placesKey) {
+    jobs.push(places.searchPlaces({ apiKey: placesKey, lat: p.lat, lng: p.lng, radius: form.poiRadius, q })
+      .then(g => add(g.map(x => ({ ...x, dist: Math.round(haversine(p.lat, p.lng, x.lat, x.lng)) })).filter(x => x.dist <= rad)))
+      .catch(e => notes.push(`google ${e.message}`)));
+  } else if (sync.enabled()) jobs.push(sync.ask('poi', { lat: p.lat, lng: p.lng, radius: form.poiRadius, q, osm: false })
     .then(r => { add(((r && r.poi) || []).filter(x => x.src !== 'osm' || !cached)); if (r && r.error) notes.push(r.error); })
     .catch(e => { notes.push(`縁泉ハブ: ${e.message}`); }));
   show(false);
@@ -588,9 +596,8 @@ function paintRecordParts(fromTyping = false) {
     const chip = (x, i, list) => `<button class="chip${on(x)}" data-pick="${list}:${i}">${esc(x.name)} ${list === 'near' ? `<small>${x.dist}m</small>` : kind(x)}</button>`;
     if (form.poiFrom) chips += `<div class="picked" role="status">${glyph('i-pin', '')}<span><b>${esc(form.poiName || '地図で選んだところ')}</b> の位置で結びます</span><button class="btn btn--plain btn--small" id="f-unpick" aria-label="選んだ場所を外す">外す</button></div>`;
     if (near.length) chips += `<span class="chips-label">近くの、前に結んだ場所</span>${near.map((x, i) => chip(x, i, 'near')).join('')}`;
-    if (!sync.enabled()) chips += '<span class="small muted" style="width:100%">設定で縁泉ハブにつなぐと、近くの場所も出ます</span>';
-    else if (c.lat == null) chips += '<span class="small muted" style="width:100%">現在地がまだわかりません。位置情報の許可を確かめてください(写真を付けると撮影地で探します)</span>';
-    if (sync.enabled() && c.lat != null) {
+    if (c.lat == null) chips += '<span class="small muted" style="width:100%">現在地がまだわかりません。位置情報の許可を確かめてください(写真を付けると撮影地で探します)</span>';
+    if (c.lat != null) {
       chips += `<span class="chips-label">近くの場所${form.poiBusy ? '<span class="poi-wait">さがしています…</span>' : ''}</span>`;
       chips += poi.map((x, i) => chip(x, i, 'poi')).join('');
       if (!form.poiBusy && form.poi && !poi.length) chips += `<span class="small muted">${form.poiNote ? `近くの場所を引けませんでした(${esc(form.poiNote)})` : `${form.poiRadius}m 以内に見つかりませんでした`}</span>`;
@@ -633,7 +640,7 @@ function paintRecordParts(fromTyping = false) {
   const fb = $('f-find');
   if (fb) {
     const q = form.name.trim();
-    const listed = form.type === '場所' && q.length >= 2 && sync.enabled() && poiCenter().lat != null && !form.poiId;
+    const listed = form.type === '場所' && q.length >= 2 && poiCenter().lat != null && !form.poiId;
     fb.innerHTML = listed && !String(form.foundKey).endsWith(`q:${q}`) ? `<button class="btn btn--plain btn--small" id="f-find-go" style="color:var(--color-accent)">「${esc(q)}」を近くで探す</button>` : '';
     if ($('f-find-go')) $('f-find-go').addEventListener('click', () => loadPoi(q));
   }
@@ -1194,7 +1201,7 @@ async function renderSettings(arg) {
   if (arg === 'story') return renderStory();
   setTab('settings');
   setTitle('設定');
-  const [url, token, key, model, lastBackupAt] = await Promise.all([db.getMeta('syncUrl', ''), db.getMeta('syncToken', ''), db.getMeta('geminiKey', ''), db.getMeta('geminiModel', ''), db.getMeta('lastBackupAt', '')]);
+  const [url, token, key, model, lastBackupAt, placesKey] = await Promise.all([db.getMeta('syncUrl', ''), db.getMeta('syncToken', ''), db.getMeta('geminiKey', ''), db.getMeta('geminiModel', ''), db.getMeta('lastBackupAt', ''), db.getMeta('placesKey', '')]);
   const pref = themePref();
   const errors = state.events.filter(e => e.error);
   $view.innerHTML = `
@@ -1226,6 +1233,15 @@ async function renderSettings(arg) {
       <div class="actions"><button class="btn btn--tinted" id="s-save-ai">保存</button></div>
     </div></details>
 
+    <details class="fold"><summary>Google Places(近くの場所)<small>${placesKey ? 'キーあり' : 'キーなし'}</small></summary><div class="fold__body">
+      <div class="card">
+        <div class="row"><label for="s-pkey">APIキー</label><input id="s-pkey" type="password" value="${esc(placesKey)}" autocomplete="off" placeholder="AIza…"></div>
+      </div>
+      <p class="hint">入れると、結ぶで「場所」を選んだとき、OpenStreetMap の候補に Google の候補を足します(この端末から直接)。キーはこの端末の中だけに置き、バックアップにも入れません。Google Cloud でキーを「HTTP リファラー: https://tadamasa.github.io/*」「API: Places API (New)」に絞ってください。近くの検索は月5,000回まで無料です。</p>
+      <div class="actions"><button class="btn btn--tinted" id="s-save-places">保存</button><button class="btn btn--plain" id="s-test-places">試す</button></div>
+      <p class="hint" id="s-places-result" aria-live="polite"></p>
+    </div></details>
+
     <details class="fold"><summary>バックアップ<small>${lastBackupAt ? new Date(lastBackupAt).toLocaleDateString('ja-JP') : ''}</small></summary><div class="fold__body">
       <p class="hint">縁・試す・評価・台帳をJSONにして、共有シートから「ファイル」(iCloud Drive)に保存します。写真の痕跡は縁泉シートに残っているので入れません。</p>
       <div class="actions"><button class="btn btn--tinted" id="s-export">書き出す</button><label class="btn btn--plain" for="s-import" style="color:var(--color-accent)">読み込む</label><input id="s-import" type="file" accept="application/json,.json" hidden></div>
@@ -1250,6 +1266,18 @@ async function renderSettings(arg) {
   if ($('s-now')) $('s-now').addEventListener('click', () => sync.syncNow());
   if ($('s-disconnect')) $('s-disconnect').addEventListener('click', async () => { if (!confirm('この端末と縁泉ハブの接続をやめますか？(端末の中のデータは消えません)')) return; await sync.disconnect(); renderSettings(); });
   $view.querySelectorAll('[data-theme-pref]').forEach(b => b.addEventListener('click', () => { try { localStorage.setItem('ensen_theme', b.dataset.themePref); } catch { /* 保存できなくても今回だけは効く */ } applyTheme(); renderSettings().then(() => { document.querySelectorAll('.fold')[1].open = true; }); }));
+  $('s-save-places').addEventListener('click', async () => { await db.setMeta('placesKey', $('s-pkey').value.trim()); toast('保存しました'); });
+  $('s-test-places').addEventListener('click', () => {
+    const out = $('s-places-result');
+    const apiKey = $('s-pkey').value.trim();
+    if (!apiKey) { out.textContent = 'キーを入れてください'; return; }
+    out.textContent = '現在地のまわりを引いています…';
+    navigator.geolocation.getCurrentPosition(pos => {
+      places.searchPlaces({ apiKey, lat: pos.coords.latitude, lng: pos.coords.longitude, radius: 300 })
+        .then(g => { out.textContent = g.length ? `通りました。${g.length}件: ${g.slice(0, 5).map(x => x.name).join('、')}…` : '通りましたが、300m以内に見つかりませんでした'; })
+        .catch(e => { out.textContent = `うまくいきませんでした: ${e.message}`; });
+    }, () => { out.textContent = '現在地がわかりませんでした'; }, { timeout: 8000, maximumAge: 60000 });
+  });
   $('s-save-ai').addEventListener('click', async () => { await db.setMeta('geminiKey', $('s-key').value.trim()); await db.setMeta('geminiModel', $('s-model').value.trim()); toast('保存しました'); });
   $('s-export').addEventListener('click', async () => { try { if (await exportData()) toast('書き出しました'); } catch (e) { toast(e.message); } });
   $('s-import').addEventListener('change', async e => {
