@@ -374,34 +374,45 @@ async function loadPoi(q = '') {
   if (form[slot + 'Key'] === key) return;
   Object.assign(form, { [slot + 'Key']: key, [slot]: null, [slot + 'Busy']: true });
   if (q) paintRecordParts();
-  let note = '';
-  const r = await sync.ask('poi', { lat: p.lat, lng: p.lng, radius: form.poiRadius, q }).catch(e => { note = `縁泉ハブ: ${e.message}`; return null; });
-  if (form[slot + 'Key'] !== key) return; // その間に場所が変わった
-  let list = (r && r.poi) || [];
-  const providers = (r && r.providers) || [];
-  if (r && r.error) note = r.error;
-  // ハブから OSM が引けなかったら、端末から直接引く(照会先がハブを断っていても、ブラウザからは通ることがある)
-  if (!list.some(x => x.src === 'osm') && (!r || r.error || r.provider === 'none' || !providers.includes('osm'))) {
-    const rad = q ? 5000 : form.poiRadius;
+  // OSM は端末から直接引く(速い)。ハブには Google の分だけを同時に尋ねる(キーが無ければすぐ空で返る)
+  const rad = q ? 5000 : form.poiRadius;
+  const stale = () => form[slot + 'Key'] !== key;
+  let list = [], providers = [], notes = [], left = 2;
+  const show = () => {
+    if (stale()) return;
+    form[slot] = list;
+    form[slot + 'Busy'] = left > 0 && !list.length;
+    form.poiNote = !list.length && left === 0 ? notes.join('・') : '';
+    if (providers.length) form.poiProviders = providers;
+    if (location.hash.startsWith('#record') && form.type === '場所') { paintRecordParts(); drawPick(); }
+  };
+  const add = (got, src) => {
+    const seen = new Set(list.map(x => x.id));
+    const osm = list.concat(got).filter(x => x.src === 'osm');
+    got = got.filter(x => !seen.has(x.id) && (x.src === 'osm' || !osm.some(o => haversine(o.lat, o.lng, x.lat, x.lng) <= 60 && o.name.replace(/\s/g, '') === x.name.replace(/\s/g, ''))));
+    list = list.concat(got).sort((a, b) => a.dist - b.dist);
+    if (src && !providers.includes(src)) providers.push(src);
+  };
+  const direct = (async () => {
     for (const ep of OVERPASS_DIRECT) {
+      const ac = new AbortController();
+      const t = setTimeout(() => ac.abort(), 12000);
       try {
-        const res = await fetch(ep, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'data=' + encodeURIComponent(overpassQuery(p.lat, p.lng, rad, q)) });
-        if (!res.ok) { note += `${note ? '・' : ''}${new URL(ep).host} ${res.status}`; continue; }
-        const got = parseOverpass(await res.json(), p.lat, p.lng, rad);
-        const seen = new Set(list.map(x => x.id));
-        list = list.concat(got.filter(x => !seen.has(x.id))).sort((a, b) => a.dist - b.dist);
+        const res = await fetch(ep, { method: 'POST', signal: ac.signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'data=' + encodeURIComponent(overpassQuery(p.lat, p.lng, rad, q)) });
+        if (!res.ok) { notes.push(`${new URL(ep).host} ${res.status}`); continue; }
+        add(parseOverpass(await res.json(), p.lat, p.lng, rad), 'osm');
         if (!providers.includes('osm')) providers.unshift('osm');
-        note = '';
-        break;
-      } catch (e) { note += `${note ? '・' : ''}${new URL(ep).host} ${e.message}`; }
+        return true;
+      } catch (e) { notes.push(`${new URL(ep).host} ${e.name === 'AbortError' ? '時間切れ' : e.message}`); }
+      finally { clearTimeout(t); }
     }
-    if (form[slot + 'Key'] !== key) return;
-  }
-  form[slot] = list;
-  form[slot + 'Busy'] = false;
-  form.poiNote = list.length ? '' : note;
-  if (providers.length) form.poiProviders = providers;
-  if (location.hash.startsWith('#record') && form.type === '場所') { paintRecordParts(); drawPick(); }
+    return false;
+  })().then(ok => { left--; show(); return ok; });
+  const hub = sync.ask('poi', { lat: p.lat, lng: p.lng, radius: form.poiRadius, q, osm: false })
+    .then(r => { add((r && r.poi) || [], null); (r && r.providers || []).forEach(x => { if (!providers.includes(x) && list.some(y => y.src === x)) providers.push(x); }); if (r && r.error) notes.push(r.error); })
+    .catch(e => { notes.push(`縁泉ハブ: ${e.message}`); })
+    .finally(() => { left--; show(); });
+  await Promise.all([direct, hub]);
 }
 // 候補を採る: 名前と位置をその場所に。外の地図の候補ならIDも持って行く(台帳が同じ場所だと覚える)
 function choosePlace(c) {

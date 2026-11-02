@@ -66,7 +66,7 @@ Code.gs を貼り替えて保存したら、「デプロイ」→「デプロイ
 |---|---|
 | `ENSEN_SHEET_ID` | 縁泉 `ensen`(1vKPwd3k…) |
 | `ENSEN_MEDIA_FOLDER_ID` | (なし)= Drive の `ensen_media` フォルダを名前で探す |
-| `OVERPASS_ENDPOINT` | (なし)= 結ぶ画面の「近くの場所」を OpenStreetMap から引く。maps.mail.ru → overpass.private.coffee → overpass.kumi.systems の順に、通るまで試す。入れるとその照会先だけを使い、`off` で止める(本家 overpass-api.de は GAS からの照会を断るので使えません)。ハブで引けなかったときは、アプリが端末から overpass-api.de を直接引きます |
+| `OVERPASS_ENDPOINT` | (なし)= 結ぶ画面の「近くの場所」を OpenStreetMap から引く。maps.mail.ru → overpass.private.coffee → overpass.kumi.systems の順に、通るまで試す。入れるとその照会先だけを使い、`off` で止める(本家 overpass-api.de は GAS からの照会を断るので使えません)。アプリは OSM を端末から overpass-api.de へ直接引き(速い)、ハブには `osm:false` で Google の分だけを尋ねます。ハブの OSM は名前検索の控えと testPoi 用 |
 | `GOOGLE_PLACES_API_KEY` | (なし)= 近くの場所は OSM だけ。入れると Google Places(New) の候補を足します(小さな店に強い。Nearby Search は Pro 枠で月5,000回まで無料、同じ場所は30分覚えるので個人なら超えません) |
 | `DIARY_SHEET_ID` / `DIARY_APP_URL` | 「日記の記録」と日記アプリ |
 | `BOOKS_SHEET_ID` / `READING_APP_URL` | 読書ハブと読書メモアプリ |
