@@ -305,6 +305,11 @@ test('近くの場所の候補: 名前で探す(5km 以内、名前の近い順)
   const log = [];
   const hub = loadHub({ fetch: poiFetch(log) });
   const r = hub.post({ token: hub.token, action: 'poi', lat: 35, lng: 139, q: '遠すぎ(る)店' });
+  // SpotMatch.gs を足していないハブでも動く(名前の近さは Code.gs にある)
+  const bare = loadHub({ fetch: poiFetch([]), withSpotMatch: false });
+  bare.props.GOOGLE_PLACES_API_KEY = 'k';
+  assert.equal(bare.post({ token: bare.token, action: 'poi', lat: 35, lng: 139 }).poi.length, 3);
+  assert.equal(bare.post({ token: bare.token, action: 'poi', lat: 35, lng: 139, q: '店' }).ok, true);
   assert.match(log[0].o.payload.data, /around:5000,35,139\)\["name"~"遠すぎ\.る\.店",i\]/);
   assert.equal(r.poi[0].name, '遠すぎる店');
   const bad = loadHub({ fetch: () => ({ getResponseCode: () => 504, getContentText: () => 'timeout' }) });

@@ -555,6 +555,22 @@ function nearbyPoi_(req) {
   return out;
 }
 
+// 名前の近さ(SpotMatch.gs と共用): 記号・空白・かっこの中を除いて、最長の共通部分 / 長い方の長さ(包含は1)
+function spotNameScore_(a, b) {
+  const clean = function (x) { return String(x || '').normalize('NFKC').toLowerCase().replace(/[(\[（【].*?[)\]）】]/g, '').replace(/[\s・\-‐ー―〜~'’".,、。!！?？&＆/／]/g, ''); };
+  a = clean(a); b = clean(b);
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  const short = a.length <= b.length ? a : b, long = a.length <= b.length ? b : a;
+  if (short.length >= 3 && long.indexOf(short) >= 0) return Math.max(0.8, short.length / long.length);
+  let best = 0;
+  for (let i = 0; i < a.length; i++) for (let j = 0; j < b.length; j++) {
+    let k = 0;
+    while (i + k < a.length && j + k < b.length && a.charAt(i + k) === b.charAt(j + k)) k++;
+    if (k > best) best = k;
+  }
+  return best / long.length;
+}
 // 同じ店が OSM と Google の両方にあれば OSM を残す(座標を持ち続けてよい方)。名前で探すときは名前の近い順
 function mergePoi_(list, q) {
   const rank = { osm: 0, google: 1 };

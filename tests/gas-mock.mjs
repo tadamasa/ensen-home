@@ -110,7 +110,7 @@ export function loadHub(opts = {}) {
   };
   if (opts.withReaders !== false) ctx.DayReaders = loadReaders(ctx);
   vm.createContext(ctx);
-  vm.runInContext((opts.code || fs.readFileSync(new URL('../hub/Code.gs', import.meta.url), 'utf8')) + '\n' + fs.readFileSync(new URL('../hub/SpotMatch.gs', import.meta.url), 'utf8'), ctx);
+  vm.runInContext((opts.code || fs.readFileSync(new URL('../hub/Code.gs', import.meta.url), 'utf8')) + (opts.withSpotMatch === false ? '' : '\n' + fs.readFileSync(new URL('../hub/SpotMatch.gs', import.meta.url), 'utf8')), ctx);
   ctx.setup();
   const sheet = n => ensen.getSheetByName(n);
   // 縁泉GASの書き方(appendRow)をまねる
