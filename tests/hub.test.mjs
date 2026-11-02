@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'fs';
+import { execSync } from 'child_process';
 import { loadHub } from './gas-mock.mjs';
+
+// 置き換え前のハブ(DayReaders に乗り換える前、PR #1 のマージ)。git の履歴がないところでは比べるテストを飛ばす
+const OLD_HUB = (() => { try { return execSync('git show 5bd6cfc:hub/Code.gs', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }); } catch (e) { return null; } })();
 
 const ev = (id, mtime, data) => ({ id, mtime, data: { id, ts: '2026-11-01T10:00:00+09:00', recorded_ts: '2026-11-01T10:01:00+09:00', type: '人', name: '山田さん', ...data } });
 const byKind = (res, k) => res.items.filter(i => i.kind === k);
@@ -147,18 +152,93 @@ test('痕跡のサムネが大きいときは少なめに分ける', () => {
   assert.ok(r.items.length < 120 && r.items.length > 20);
 });
 
-test('その日のまわり: 日記・読み終えた本・観た映画を読むだけ', () => {
+// 2026-11-02 に本物のシートで確かめた見出し(tadamasa/diary-home の lib/day-readers/README.md)
+const BOOKS_H = ['id', 'rev', 'mtime', 'deleted', 'title', 'author', 'status', 'category', 'score', 'finishedAt', 'json'];
+const NOTES_H = ['id', 'rev', 'mtime', 'deleted', 'date', 'bookId', 'bookTitle', 'kind', 'text', 'quote', 'json'];
+const VIEWS_H = ['id', 'rev', 'mtime', 'deleted', 'date', 'filmId', 'filmTitle', 'place', 'venue', 'score', 'text', 'json'];
+const FILMS_H = ['id', 'rev', 'mtime', 'deleted', 'title', 'year', 'directors', 'status', 'lastSeen', 'seenCount', 'category', 'tmdbId', 'json'];
+const DIARY_ID = '1yVC3q2dm4-LxrAg_lRDk8G3qqU-WNQnI5LznFPgxKp8', BOOKS_ID = '1WEsS95CKH7JPFuGf7BYzlTV-d6FyTVg0OCOymKHqsZg', MOVIES_ID = '156oktIUuxKOcFZn0QYrx6ncY3AFiY-7DjgAIYbiRCm4';
+function aroundBooks(hub) {
+  hub.addBook(DIARY_ID, { CoreData: [['Date', 'Time', 'Text', 'Feelings', 'Thinkings', 'Id'], ['2026-10-31', '22:00', '夜の散歩', '穏やか', '', 'd1'], ['2026-10-31', '08:00', '朝の珈琲', '', '考えた', 'd2'], ['2026-10-30', '21:00', '別の日', '', '', 'd3']] });
+  hub.addBook(BOOKS_ID, {
+    books: [BOOKS_H, ['b1', 1, 1, 'false', '方丈記', '鴨長明', '読了', '古典', '', '2026-10-31', '{"cover":"c.jpg"}'], ['b2', 1, 1, 'true', '消した本', '', '読了', '', '', '2026-10-31', '{}'], ['b3', 1, 1, 'false', '途中の本', '', '読書中', '', '', '2026-10-31', '{}'], ['b4', 1, 1, 'false', '別の日の本', '', '読了', '', '', '2026-10-12', '{}']],
+    notes: [NOTES_H, ['n1', 1, 1, 'false', '2026-10-31', 'b1', '方丈記', 'memo', 'ゆく河の流れ', '', '{}']],
+  });
+  hub.addBook(MOVIES_ID, {
+    views: [VIEWS_H, ['v1', 1, 1, 'false', '2026-10-31', 'f1', 'PERFECT DAYS', 'theater', '近所の映画館', 4, 'よかった', '{}'], ['v2', 1, 1, 'false', '2026-10', 'f1', '思い出し', 'tv', '', '', '', '{}'], ['v3', 1, 1, 'false', '2026-10-05', 'f2', '別の映画', 'stream', '', '', '', '{}']],
+    films: [FILMS_H, ['f1', 1, 1, 'false', 'PERFECT DAYS', '2023', 'ヴィム・ヴェンダース', 'seen', '2026-10-31', 1, '', 1, '{"posterPath":"/p.jpg","genres":["ドラマ","音楽","x"]}']],
+  });
+}
+
+test('その日のまわり: 日記・読み終えた本・観た映画を DayReaders で読むだけ', () => {
   const hub = loadHub();
-  hub.addBook('1yVC3q2dm4-LxrAg_lRDk8G3qqU-WNQnI5LznFPgxKp8', { CoreData: [['Date', 'Time', 'Text', 'Feelings', 'Thinkings'], ['2026-10-31', '22:00', '夜の散歩', '穏やか', ''], ['2026-10-30', '21:00', '別の日', '', '']] });
-  hub.addBook('1WEsS95CKH7JPFuGf7BYzlTV-d6FyTVg0OCOymKHqsZg', { books: [['id'], ['b1', 1, 1, 'false', '方丈記', '鴨長明', '読了', '', '', '2026-10-31', '{"cover":"c.jpg"}']] });
-  hub.addBook('156oktIUuxKOcFZn0QYrx6ncY3AFiY-7DjgAIYbiRCm4', { views: [['id'], ['v1', 1, 1, 'false', '2026-10-31', 'f1', 'PERFECT DAYS', 'theater', '近所の映画館']] });
+  aroundBooks(hub);
   const d = hub.post({ token: hub.token, action: 'day', date: '2026-10-31' });
   assert.equal(d.ok, true);
-  assert.equal(d.diary.entries.length, 1);
-  assert.equal(d.diary.entries[0].text, '夜の散歩');
+  assert.deepEqual(d.diary.entries.map(e => e.text), ['朝の珈琲', '夜の散歩']);
   assert.equal(d.diary.url, 'https://tadamasa.github.io/diary-home/#day/2026-10-31');
+  assert.deepEqual(d.books.books.map(b => b.title), ['方丈記']);
   assert.equal(d.books.books[0].cover, 'c.jpg');
-  assert.equal(d.films.films[0].url, 'https://tadamasa.github.io/movie-memo/#film/f1');
+  assert.equal(d.books.books[0].url, 'https://tadamasa.github.io/reading-memo/#book/b1');
+  assert.equal(d.films.films.length, 1);
+  const f = d.films.films[0];
+  assert.equal(f.url, 'https://tadamasa.github.io/movie-memo/#film/f1');
+  assert.equal(f.place, '映画館'); assert.equal(f.directors, 'ヴィム・ヴェンダース');
+  assert.equal(f.poster, 'https://image.tmdb.org/t/p/w185/p.jpg'); // films の json は13列目(見出しで引くので出る)
+  // シートIDとアプリURLはスクリプト プロパティから渡す
+  hub.props.READING_APP_URL = 'https://example.com/r/';
+  assert.equal(hub.post({ token: hub.token, action: 'day', date: '2026-10-31' }).books.books[0].url, 'https://example.com/r/#book/b1');
+  // 月の印
+  const m = hub.post({ token: hub.token, action: 'month', month: '2026-10' });
+  assert.deepEqual(m.books, ['2026-10-12', '2026-10-31']);
+  assert.deepEqual(m.films, ['2026-10-05', '2026-10-31']);
+  assert.equal(hub.post({ token: hub.token, action: 'month', month: '2026/10' }).ok, false);
+});
+
+test('その日のまわり: 置き換え前のハブと同じ日記・本・映画・月の印が出る', { skip: !OLD_HUB && 'git の履歴がない' }, () => {
+  const before = loadHub({ code: OLD_HUB, withReaders: false });
+  const after = loadHub();
+  aroundBooks(before); aroundBooks(after);
+  for (const date of ['2026-10-31', '2026-10-30', '2026-10-12', '2026-10-05']) {
+    const a = before.post({ token: before.token, action: 'day', date }), b = after.post({ token: after.token, action: 'day', date });
+    assert.deepEqual(b.diary.entries.map(({ time, text, feelings }) => ({ time, text, feelings })), a.diary.entries, date);
+    assert.equal(b.diary.url, a.diary.url);
+    assert.deepEqual(b.books.books.map(({ title, author, cover, url }) => ({ title, author, cover, url })), a.books.books, date);
+    // ポスターは置き換え前は10列目を json として読んでいたので空だった(直った不具合)。それ以外は同じ
+    assert.deepEqual(b.films.films.map(({ genres, poster, ...x }) => x), a.films.films.map(({ poster, ...x }) => x), date);
+  }
+  assert.deepEqual(after.post({ token: after.token, action: 'month', month: '2026-10' }), before.post({ token: before.token, action: 'month', month: '2026-10' }));
+});
+
+test('ライブラリが追加されていなくても同期は動き、その日は理由つきで空', () => {
+  const hub = loadHub({ withReaders: false });
+  hub.gas.event({ name: '友人' });
+  assert.equal(hub.post({ token: hub.token, since: 0 }).ok, true);
+  const d = hub.post({ token: hub.token, action: 'day', date: '2026-10-31' });
+  assert.equal(d.ok, true);
+  assert.equal(d.books.ok, false);
+  assert.match(d.books.error, /DayReaders/);
+  assert.match(hub.post({ token: hub.token, action: 'month', month: '2026-10' }).error, /DayReaders/);
+});
+
+test('固定しているライブラリの版と、テストに写したライブラリの版が同じ', () => {
+  const dep = JSON.parse(fs.readFileSync(new URL('../hub/appsscript.json', import.meta.url), 'utf8')).dependencies.libraries.find(l => l.userSymbol === 'DayReaders');
+  assert.equal(dep.libraryId, '1AERbCrDNFVHKT1YDCTSensHNs4X8QrACyaS-p3xDFhqrUq2r7NGMuMwk');
+  const src = fs.readFileSync(new URL('./lib/DayReaders.gs', import.meta.url), 'utf8');
+  assert.equal(src.match(/var VERSION = (\d+);/)[1], dep.version);
+  // 重複していた読み取りコードは消えた
+  const code = fs.readFileSync(new URL('../hub/Code.gs', import.meta.url), 'utf8');
+  for (const name of ['booksFor_', 'filmsFor_', 'diaryFor_', 'FILM_PLACE_LABEL', 'toDateStr_']) assert.ok(!code.includes(name), name);
+});
+
+test('試す: ブクログ取込の印(src)をアプリへ渡す', () => {
+  const hub = loadHub();
+  hub.gas.intent({ id: 'bl', what: '仮説力を鍛える', origin: '', enrich: '{"src_id":"booklog:4797343028:読みたい","backfill":"booklog","keys":{"isbn":"9784797343021"}}' });
+  hub.gas.intent({ id: 'mine', what: '方丈記を読む' });
+  const got = Object.fromEntries(byKind(hub.post({ token: hub.token, since: 0 }), 'intents').map(i => [i.id, i.data]));
+  assert.equal(got.bl.src, 'booklog:4797343028:読みたい');
+  assert.equal(got.bl.isbn, '9784797343021');
+  assert.equal(got.mine.src, '');
 });
 
 test('近くの場所の候補はキーがあるときだけ', () => {
@@ -263,4 +343,41 @@ test('スポットを名前で突き合わせ、正しそうな位置を spot_fi
   assert.equal(hub.ctx.applySpotMatches().added, 0);
   assert.equal(hub.ctx.undoAutoSpotFixes().added, 3);
   assert.equal(hub.rows('spot_fixes').slice(1).filter(x => x[6] === 'undo').length, 3);
+});
+
+test('spot_fixes の ts は書き込みの入口で yyyy-MM-ddTHH:mm:ss+09:00 にそろえる', () => {
+  const hub = loadHub();
+  const fx = (id, ts) => ({ id, mtime: 1, data: { id, ts, aid: 'a-' + id, status: 'ok' } });
+  hub.post({ token: hub.token, since: 0, push: { spot_fixes: [
+    fx('z', '2026-11-02T01:02:03.456Z'),        // UTC・ミリ秒付き → 東京時間
+    fx('n', '2026-11-02T10:02'),                // オフセットなし・秒なし → 東京時間とみなす
+    fx('o', '2026-11-02T03:02:03+0200'),        // ほかのオフセット
+    fx('k', '2026-11-02T10:02:03+09:00'),       // そのまま
+    fx('bad', 'きのう'),                         // 読めない → 受け取った時刻
+  ] } });
+  const ts = Object.fromEntries(hub.rows('spot_fixes').slice(1).map(r => [r[0], r[1]]));
+  assert.equal(ts.z, '2026-11-02T10:02:03+09:00');
+  assert.equal(ts.n, '2026-11-02T10:02:00+09:00');
+  assert.equal(ts.o, '2026-11-02T10:02:03+09:00');
+  assert.equal(ts.k, '2026-11-02T10:02:03+09:00');
+  assert.match(ts.bad, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+09:00$/);
+  // アプリへは表の何行目か(seq)も返す
+  const got = hub.post({ token: hub.token, since: 0 }).items.filter(i => i.kind === 'spot_fixes').map(i => i.data);
+  assert.deepEqual(got.map(d => d.seq).sort(), [2, 3, 4, 5, 6]);
+});
+
+test('返す形を変えた送り直しでは mtime を進めず、手元の未送信の操作を退けない', () => {
+  const before = loadHub({ code: OLD_HUB || undefined });
+  const iid = before.gas.intent({ what: '方丈記を読む' });
+  const r0 = before.post({ token: before.token, since: 0 });
+  const old = r0.items.find(i => i.id === iid).mtime;
+  // 同じシートを新しいハブで開く(形の印が変わる)
+  const after = loadHub();
+  after.ensen.sheets.clear();
+  for (const [n, sh] of before.ensen.sheets) after.ensen.sheets.set(n, sh);
+  after.props.REV = before.props.REV;
+  after.props.TOKEN = before.token;
+  const r1 = after.post({ token: before.token, since: r0.rev, push: { intents: [{ id: iid, mtime: old + 1, data: { status: 'released' } }] } });
+  assert.equal(after.rows('intents')[1][6], 'released');
+  assert.equal(r1.items.find(i => i.id === iid).data.status, 'released');
 });

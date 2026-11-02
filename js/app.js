@@ -7,7 +7,7 @@ import {
   TYPES, VERBS, ORIGINS, TYPE_KEY, TYPE_ICON, VERB_ICON, VERB_ORDER, VERB_TIPS,
   esc, uuid, haversine, isoLocal, today, isDate, dayOf, timeOf, toInputValue, fromInputValue, shiftMonth, monthCells, dateLabel, gapLabel, autoSeason,
   findActant, suggestVerb, nearbyPlaces, nameChips, isHomeMove, homeKind, echoOf,
-  frontier, reunions, apprQueue, placeNameFor, latestSpotFixes, applySpotFixes, spotSuspects, spotCandidates, yearReview, yearStory, yearsOf, SEASONS, meshBounds, latestWeight, mapPoints, distantCandidates, distantPrompt, parseDistant, parseExif,
+  frontier, reunions, apprQueue, placeNameFor, isBooklogIntent, booklogCsv, READING_MEMO_URL, latestSpotFixes, applySpotFixes, spotSuspects, spotCandidates, yearReview, yearStory, yearsOf, SEASONS, meshBounds, latestWeight, mapPoints, distantCandidates, distantPrompt, parseDistant, parseExif,
 } from './ensen.js';
 
 // ---------- 状態 ----------
@@ -117,6 +117,8 @@ function echoHtml(e) {
 }
 
 function traceById(id) { return state.traces.find(t => t.id === id); }
+// 縁の出どころ(events.source)の呼び名。無いものはそのまま出す
+const SOURCE_LABEL = { reading: '読書メモ', movie: '映画メモ' };
 const thumbSrc = t => (t && t.thumb ? `data:image/jpeg;base64,${t.thumb}` : '');
 
 function eventNode(e) {
@@ -126,7 +128,7 @@ function eventNode(e) {
     e.star ? '<span class="star" aria-label="後で効く印">★</span>' : '',
     e.media ? `<a href="${esc(e.media)}" target="_blank" rel="noopener">写真(Drive)</a>` : '',
     e.error ? `<span class="badge badge--warn">ハブに断られました: ${esc(e.error)}</span>` : (e.pending ? '<span class="badge">未送信</span>' : ''),
-    e.source && e.source !== 'home' && e.source !== 'app' ? `<span class="badge">${esc(e.source)}</span>` : '',
+    e.source && e.source !== 'home' && e.source !== 'app' ? `<span class="badge">${esc(SOURCE_LABEL[e.source] || e.source)}</span>` : '',
   ].filter(Boolean).join('');
   return `<div class="node ${kcls(e.type)}">
     <span class="node__dot">${glyph(TYPE_ICON[e.type] || 'i-place', '')}</span>
@@ -871,20 +873,36 @@ function lookReunion(el) {
 }
 
 // ---- 霧の中へ(まだ試していないこと。咎めない) ----
+// ブクログ取込の「読みたい」は読書メモで管理している。消さず・状態も変えず、ふだんの一覧から外して折りたたみに入れる
+const FOG_STATUS = { fulfilled: '試した', released: '手放した' };
 function lookFog(el) {
-  const open = state.intents.filter(i => (i.status || 'open') === 'open');
-  open.sort((a, b) => (state.fogOrder === 'old' ? sortTs(a, b) : sortTs(b, a)));
-  const done = state.intents.filter(i => i.status && i.status !== 'open').sort((a, b) => sortTs(b, a)).slice(0, 30);
+  const order = (a, b) => (state.fogOrder === 'old' ? sortTs(a, b) : sortTs(b, a));
+  const isOpen = i => (i.status || 'open') === 'open';
+  const mine = state.intents.filter(i => !isBooklogIntent(i));
+  const booklog = state.intents.filter(isBooklogIntent);
+  const open = mine.filter(isOpen).sort(order);
+  const done = mine.filter(i => !isOpen(i)).sort((a, b) => sortTs(b, a)).slice(0, 30);
+  const blOpen = booklog.filter(isOpen).sort(order);
+  const blDone = booklog.filter(i => !isOpen(i)).sort((a, b) => sortTs(b, a));
   const row = i => `<div class="list-row ${kcls(i.type)}">${i.type ? glyph(TYPE_ICON[i.type]) : '<span class="glyph"></span>'}<div class="list-row__main">
     <div class="list-row__title">${esc(i.what)}</div>
-    <div class="list-row__sub">${esc(dayOf(i.ts).replace(/-/g, '.'))}${i.origin ? `・きっかけ ${esc(i.origin)}${i.origin_name ? `(${esc(i.origin_name)})` : ''}` : ''}${i.pending ? ' <span class="badge">未送信</span>' : ''}</div>
-    ${i.status === 'open' || !i.status ? `<div class="chips" style="margin-top:var(--space-2)"><a class="chip" href="#record/intent/${encodeURIComponent(i.id)}" style="color:var(--color-accent);text-decoration:none">試した → 縁を結ぶ</a><button class="chip" data-release="${esc(i.id)}">手放す</button></div>` : ''}
+    <div class="list-row__sub">${esc(dayOf(i.ts).replace(/-/g, '.'))}${i.origin ? `・きっかけ ${esc(i.origin)}${i.origin_name ? `(${esc(i.origin_name)})` : ''}` : ''}${!isOpen(i) ? `・${FOG_STATUS[i.status] || esc(i.status)}` : ''}${i.pending ? ' <span class="badge">未送信</span>' : ''}</div>
+    ${isOpen(i) ? `<div class="chips" style="margin-top:var(--space-2)"><a class="chip" href="#record/intent/${encodeURIComponent(i.id)}" style="color:var(--color-accent);text-decoration:none">試した → 縁を結ぶ</a><button class="chip" data-release="${esc(i.id)}">手放す</button></div>` : ''}
     </div></div>`;
+  const reading = booklog.length ? `<details class="fold" id="fog-booklog"${state.fogBooklogOpen ? ' open' : ''}><summary>読書メモで管理している読みたい(${booklog.length}件)</summary><div class="fold__body">
+      <p class="hint">7月にブクログから取り込んだ「読みたい」です。いまは読書メモで管理しています。ここでも「試した」「手放す」を押せます。</p>
+      <div class="chips" style="margin:0 var(--space-4) var(--space-2)"><a class="chip" href="${esc(READING_MEMO_URL)}" target="_blank" rel="noopener" style="color:var(--color-accent);text-decoration:none">読書メモで開く</a><button class="chip" id="fog-csv">一覧を書き出す</button></div>
+      <div class="card">${blOpen.concat(blDone).map(row).join('')}</div></div></details>` : '';
   el.innerHTML = `<div class="seg">${[['old', '古い順'], ['new', '新しい順']].map(([k, l]) => `<button class="chip${state.fogOrder === k ? ' is-active' : ''}" data-ord="${k}">${l}</button>`).join('')}<a class="chip" href="#record/try" style="text-decoration:none;margin-left:auto">＋試すことに</a></div>
     <p class="hint">まだ試していない縁。急かすものは何もありません。</p>
     <div class="card">${open.map(row).join('') || '<p class="empty-line">霧はいま晴れています。</p>'}</div>
-    ${done.length ? `<details class="fold"><summary>晴れた霧</summary><div class="fold__body"><div class="card">${done.map(i => `<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(i.what)}</div><div class="list-row__sub">${i.status === 'fulfilled' ? '試した' : '手放した'}</div></div></div>`).join('')}</div></div></details>` : ''}`;
+    ${reading}
+    ${done.length ? `<details class="fold"><summary>晴れた霧</summary><div class="fold__body"><div class="card">${done.map(i => `<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(i.what)}</div><div class="list-row__sub">${FOG_STATUS[i.status] || esc(i.status)}</div></div></div>`).join('')}</div></div></details>` : ''}`;
   el.querySelectorAll('[data-ord]').forEach(b => b.addEventListener('click', () => { state.fogOrder = b.dataset.ord; lookFog(el); }));
+  const fold = el.querySelector('#fog-booklog');
+  if (fold) fold.addEventListener('toggle', () => { state.fogBooklogOpen = fold.open; });
+  const csv = el.querySelector('#fog-csv');
+  if (csv) csv.addEventListener('click', () => shareText(booklogCsv(state.intents), `ensen-booklog-yomitai-${today()}.csv`, 'text/csv').catch(e => alert(`書き出せませんでした: ${e.message || e}`)));
   el.querySelectorAll('[data-release]').forEach(b => b.addEventListener('click', async () => {
     const it = state.intents.find(x => x.id === b.dataset.release);
     if (!it || !confirm(`「${it.what}」を手放しますか？(縁泉の intents に「手放した」と残ります)`)) return;
@@ -892,6 +910,21 @@ function lookFog(el) {
     await load();
     lookFog(el);
   }));
+}
+
+// 文字の書類を、iPhone の共有シート(なければダウンロード)へ渡す。UTF-8
+async function shareText(text, name, type) {
+  const blob = new Blob([text], { type: `${type};charset=utf-8` });
+  const file = new File([blob], name, { type });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: name }); } catch (e) { if (e.name !== 'AbortError') throw e; }
+    return;
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
 
 // ---- 評価の間(見逃していた縁を、ふり返る。褒めない・数えない) ----

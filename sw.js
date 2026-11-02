@@ -1,6 +1,6 @@
 // アプリ本体をキャッシュして、電波がなくても開けるようにする。
 // 縁泉ハブ・Gemini・地図タイルなど外部はキャッシュしない。
-const VERSION = 'v9';
+const VERSION = 'v10';
 const PREFIX = 'ensen-home-';
 const CACHE = `${PREFIX}${VERSION}`;
 const SHELL = [

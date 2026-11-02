@@ -68,7 +68,7 @@ function applySpotMatches() {
   const fx = spotFixSheet_(ss);
   const rows = sh.getRange(2, 1, sh.getLastRow() - 1, SPOT_MATCH_HEADERS.length).getValues();
   const out = [];
-  const now = isoNow_();
+  const now = spotTs_(); // spot_fixes の ts は spotTs_ を通す(Code.gs)
   rows.forEach(function (r) {
     const aid = String(r[0]), verdict = String(r[11]);
     if (!aid || fixed[aid]) return;
@@ -92,7 +92,7 @@ function undoAutoSpotFixes() {
     const aid = String(r[2]), ts = isoString_(r[1]);
     if (!latest[aid] || ts >= latest[aid].ts) latest[aid] = { ts: ts, status: String(r[6]), source: String(r[7]) };
   });
-  const now = isoNow_();
+  const now = spotTs_(); // spot_fixes の ts は spotTs_ を通す(Code.gs)
   const out = Object.keys(latest).filter(function (a) { return latest[a].source === 'auto' && latest[a].status !== 'undo'; })
     .map(function (a) { return [Utilities.getUuid(), now, a, '', '', '', 'undo', 'auto']; });
   if (out.length) fx.getRange(fx.getLastRow() + 1, 1, out.length, 8).setValues(out);
