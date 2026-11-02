@@ -189,11 +189,15 @@ function pushEvent_(st, item, id) {
   const recorded = isoOr_(p.recorded_ts, isoNow_());
   const ts = isoOr_(p.ts, recorded);
   const lat = numOrBlank_(p.lat), lng = numOrBlank_(p.lng);
-  const reg = upsertActant_(st, p.type, name, lat, lng, ts);
+  const poiId = p.type === '場所' && /^(osm|google):[\w\/\-]+$/.test(String(p.poi_id || '')) ? String(p.poi_id) : '';
+  const reg = upsertActant_(st, p.type, name, lat, lng, ts, poiId);
   const verb = p.verb || (reg.existed ? '再会' : defaultNewVerb_(p.type));
   let media = String(p.media || '');
   if (p.photo) media = storeMedia_(p.photo, ts);
-  const enrich = p.trace_id ? JSON.stringify({ trace_id: String(p.trace_id) }) : '';
+  const en = {};
+  if (p.trace_id) en.trace_id = String(p.trace_id);
+  if (poiId) en.poi = poiId; // 結ぶときに地図の候補から選んだ場所
+  const enrich = Object.keys(en).length ? JSON.stringify(en) : '';
   const row = [id, ts, recorded, lat, lng, safe_(p.place || ''), p.type, safe_(name), reg.actant_id, verb,
     safe_(p.note || ''), media, p.star ? 1 : 0, 'home', safe_(p.tags || ''), enrich];
   st.sheets.events.appendRow(row);
@@ -308,11 +312,16 @@ function addRow_(st, kind, id, row, mtime) {
  * 場所=名称類似(部分一致可)かつ 150m 以内 / ほか=正規化した名前・別名の一致。
  * 台帳は追記専用の対象外なので last_seen と count を更新してよい。
  */
-function upsertActant_(st, type, name, lat, lng, ts) {
+function upsertActant_(st, type, name, lat, lng, ts, poiId) {
   const sh = st.sheets.actants;
   const rows = st.rows.actants;
   const norm = normalizeName_(name);
-  for (let i = 0; i < rows.length; i++) {
+  // 地図の候補のIDが同じ台帳があれば、名前の表記が違っても同じ場所
+  let hit = -1;
+  if (poiId) {
+    for (let i = 0; i < rows.length; i++) if (rows[i][1] === type && parseJson_(rows[i][4]).poi === poiId) { hit = i; break; }
+  }
+  for (let i = 0; hit < 0 && i < rows.length; i++) {
     const r = rows[i];
     if (r[1] !== type) continue;
     const names = [String(r[2])].concat(String(r[3] || '').split(',')).filter(String);
@@ -320,17 +329,30 @@ function upsertActant_(st, type, name, lat, lng, ts) {
     if (type === '場所' && lat !== '' && lng !== '') {
       const k = parseJson_(r[4]);
       if (k.lat != null && k.lng != null && haversineM_(lat, lng, Number(k.lat), Number(k.lng)) > PLACE_MATCH_RADIUS_M) continue;
+      if (poiId && k.poi && k.poi !== poiId) continue; // 別の店だとわかっている
     }
+    hit = i;
+  }
+  if (hit >= 0) {
+    const r = rows[hit];
     const count = (Number(r[7]) || 0) + 1;
     const lastSeen = isoString_(r[6]) > ts ? r[6] : ts; // 過去の日時で書いたときは last_seen を戻さない
-    sh.getRange(i + 2, 7, 1, 2).setValues([[lastSeen, count]]);
+    sh.getRange(hit + 2, 7, 1, 2).setValues([[lastSeen, count]]);
     r[6] = lastSeen; r[7] = count;
+    const k = parseJson_(r[4]);
+    if (poiId && !k.poi) { // 台帳に地図のIDを覚えさせる(位置は台帳のまま)
+      k.poi = poiId;
+      r[4] = JSON.stringify(k);
+      sh.getRange(hit + 2, 5).setValue(r[4]);
+    }
     bumpIfChanged_(st, 'actants', String(r[0]), hashRow_('actants', r));
     return { actant_id: String(r[0]), existed: true };
   }
   const id = Utilities.getUuid();
-  const keys = (type === '場所' && lat !== '' && lng !== '') ? JSON.stringify({ lat: lat, lng: lng }) : '{}';
-  const row = [id, type, safe_(name), '', keys, ts, ts, 1];
+  const k = {};
+  if (type === '場所' && lat !== '' && lng !== '') { k.lat = lat; k.lng = lng; }
+  if (poiId) k.poi = poiId;
+  const row = [id, type, safe_(name), '', JSON.stringify(k), ts, ts, 1];
   sh.appendRow(row);
   addRow_(st, 'actants', id, row.map(unsafe_), Date.now());
   return { actant_id: id, existed: false };
@@ -384,7 +406,7 @@ function dataOf_(kind, r) {
   if (kind === 'appraisals') return { id: s(r[0]), ts: isoString_(r[1]), target: s(r[2]), weight: Number(r[3]) || 0, note: s(r[4]) };
   if (kind === 'actants') {
     const k = parseJson_(r[4]);
-    return { id: s(r[0]), type: s(r[1]), name: s(r[2]), aliases: s(r[3]), lat: k.lat != null ? Number(k.lat) : null, lng: k.lng != null ? Number(k.lng) : null, first_seen: isoString_(r[5]), last_seen: isoString_(r[6]), count: Number(r[7]) || 0 };
+    return { id: s(r[0]), type: s(r[1]), name: s(r[2]), aliases: s(r[3]), lat: k.lat != null ? Number(k.lat) : null, lng: k.lng != null ? Number(k.lng) : null, poi: k.poi ? String(k.poi) : '', first_seen: isoString_(r[5]), last_seen: isoString_(r[6]), count: Number(r[7]) || 0 };
   }
   if (kind === 'spot_fixes') return { id: s(r[0]), ts: isoString_(r[1]), aid: s(r[2]), event_id: s(r[3]), lat: n(r[4]), lng: n(r[5]), status: s(r[6]), source: s(r[7]) };
   if (kind === 'place_names') return { id: s(r[0]), ts: isoString_(r[1]), trace_id: s(r[2]), lat: n(r[3]), lng: n(r[4]), name: s(r[5]), source: s(r[6]) };
@@ -475,26 +497,150 @@ function monthMarks_(ym) {
   return readSafe_(function (R) { return R.monthMarks(prop_('BOOKS_SHEET_ID', BOOKS_SHEET_ID_DEFAULT), prop_('MOVIES_SHEET_ID', MOVIES_SHEET_ID_DEFAULT), ym); });
 }
 
-// ========== 近くの場所の候補(任意。GOOGLE_PLACES_API_KEY があるときだけ) ==========
+// ========== 近くの場所の候補(結ぶ画面の「近くの場所」) ==========
+// 元の縁泉(Phase 1.7)と同じ考え方: 第一層=自分の台帳はアプリが手元で出す。ここは第二層=外の地図の候補だけ。
+// 失敗・遅延は静かに諦める(空で返す)。ingest_log にも書かない。
+//
+// 照会先(スクリプトプロパティで決まる。コードは変えない):
+//   - OpenStreetMap(Overpass) … 既定で使う。キー不要・無料。座標を保存してよい(ODbL、表記「© OpenStreetMap contributors」)
+//       OVERPASS_ENDPOINT で照会先を変えられる。'off' で止める。
+//       本家 overpass-api.de は GAS からの照会を 406 で断る(2026-07 実測)ので、既定は GAS から通った maps.mail.ru
+//   - Google Places(New) … GOOGLE_PLACES_API_KEY があるときだけ足す。小さな店に強い。
+//       Google の規約では座標の保存は30日まで・place_id は無期限。OSM と同じ店が重なったら OSM を残す
+// req: { lat, lng, radius?(m, 100〜1000、既定300), q?(名前で探す。そのときは 5km 以内) }
+// 返す: { ok, providers:[...], poi:[{ id:'osm:node/123'|'google:ChIJ…', src, name, lat, lng, category, dist }] }
+const POI_RADIUS_M = 300;
+const POI_SEARCH_RADIUS_M = 5000;
+const POI_CACHE_SEC = 1800;
+const POI_CACHE_VER = 'poi3';
+const POI_DUP_M = 60;
+const OVERPASS_DEFAULT = 'https://maps.mail.ru/osm/tools/overpass/api/interpreter';
+
 function nearbyPoi_(req) {
   const lat = Number(req.lat), lng = Number(req.lng);
-  const key = PropertiesService.getScriptProperties().getProperty('GOOGLE_PLACES_API_KEY');
-  if (!key || !isFinite(lat) || !isFinite(lng)) return { ok: true, provider: 'none', poi: [] };
+  if (!isFinite(lat) || !isFinite(lng) || req.lat === '' || req.lat == null) return { ok: true, providers: [], provider: 'none', poi: [] };
+  const q = String(req.q || '').trim().slice(0, 40);
+  const radius = q ? POI_SEARCH_RADIUS_M : Math.max(100, Math.min(1000, Number(req.radius) || POI_RADIUS_M));
+  const props = PropertiesService.getScriptProperties();
+  const key = props.getProperty('GOOGLE_PLACES_API_KEY');
+  const ep = String(props.getProperty('OVERPASS_ENDPOINT') || OVERPASS_DEFAULT).trim();
+  const providers = [];
+  if (ep && ep !== 'off') providers.push(overpassProvider_(ep));
+  if (key) providers.push(googleProvider_(key));
+  if (!providers.length) return { ok: true, providers: [], provider: 'none', poi: [] };
+  const names = providers.map(function (x) { return x.name; });
   const cache = CacheService.getScriptCache();
-  const ck = 'poi_' + lat.toFixed(3) + '_' + lng.toFixed(3);
+  const ck = [POI_CACHE_VER, names.join('+'), lat.toFixed(3), lng.toFixed(3), radius, q ? Utilities.base64EncodeWebSafe(q) : ''].join('_').slice(0, 240);
   const hit = cache.get(ck);
-  if (hit) return { ok: true, provider: 'google', poi: JSON.parse(hit), cached: true };
-  const res = UrlFetchApp.fetch('https://places.googleapis.com/v1/places:searchNearby', {
-    method: 'post', contentType: 'application/json', muteHttpExceptions: true,
-    headers: { 'X-Goog-Api-Key': key, 'X-Goog-FieldMask': 'places.displayName,places.location' },
-    payload: JSON.stringify({ locationRestriction: { circle: { center: { latitude: lat, longitude: lng }, radius: 300 } }, maxResultCount: 10, languageCode: 'ja' }),
+  if (hit) { try { const j = JSON.parse(hit); j.cached = true; return j; } catch (e) {} }
+  // 照会先は並べて同時に投げる(遅い方に引きずられない)
+  const reqs = providers.map(function (x) { return x.request(lat, lng, radius, q); });
+  let resps;
+  try { resps = UrlFetchApp.fetchAll(reqs); } catch (e) { return { ok: true, providers: names, provider: names[0], poi: [], error: String(e && e.message || e).slice(0, 200) }; }
+  const errors = [];
+  let all = [];
+  providers.forEach(function (x, i) {
+    const res = resps[i];
+    const code = res.getResponseCode();
+    if (code >= 400) { errors.push(x.name + ' ' + code); return; }
+    try { all = all.concat(x.parse(res.getContentText())); } catch (e) { errors.push(x.name + ' parse'); }
   });
-  if (res.getResponseCode() >= 400) return { ok: true, provider: 'google', poi: [], error: 'places ' + res.getResponseCode() };
-  const poi = (JSON.parse(res.getContentText()).places || []).map(function (p) {
-    return { name: p.displayName && p.displayName.text, lat: p.location && p.location.latitude, lng: p.location && p.location.longitude };
-  }).filter(function (p) { return p.name; });
-  try { cache.put(ck, JSON.stringify(poi), 1800); } catch (e) {}
-  return { ok: true, provider: 'google', poi: poi };
+  const poi = mergePoi_(all.filter(function (p) { return p && p.name && isFinite(p.lat) && isFinite(p.lng); }).map(function (p) {
+    p.dist = Math.round(haversineM_(lat, lng, p.lat, p.lng));
+    return p;
+  }).filter(function (p) { return p.dist <= radius; }), q);
+  const out = { ok: true, providers: names, provider: names[0], poi: poi };
+  if (errors.length) out.error = errors.join(', ');
+  else { try { cache.put(ck, JSON.stringify(out), POI_CACHE_SEC); } catch (e) {} } // 失敗はキャッシュしない
+  return out;
+}
+
+// 名前の近さ(SpotMatch.gs と共用): 記号・空白・かっこの中を除いて、最長の共通部分 / 長い方の長さ(包含は1)
+function spotNameScore_(a, b) {
+  const clean = function (x) { return String(x || '').normalize('NFKC').toLowerCase().replace(/[(\[（【].*?[)\]）】]/g, '').replace(/[\s・\-‐ー―〜~'’".,、。!！?？&＆/／]/g, ''); };
+  a = clean(a); b = clean(b);
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  const short = a.length <= b.length ? a : b, long = a.length <= b.length ? b : a;
+  if (short.length >= 3 && long.indexOf(short) >= 0) return Math.max(0.8, short.length / long.length);
+  let best = 0;
+  for (let i = 0; i < a.length; i++) for (let j = 0; j < b.length; j++) {
+    let k = 0;
+    while (i + k < a.length && j + k < b.length && a.charAt(i + k) === b.charAt(j + k)) k++;
+    if (k > best) best = k;
+  }
+  return best / long.length;
+}
+// 同じ店が OSM と Google の両方にあれば OSM を残す(座標を持ち続けてよい方)。名前で探すときは名前の近い順
+function mergePoi_(list, q) {
+  const rank = { osm: 0, google: 1 };
+  list.sort(function (a, b) { return (rank[a.src] - rank[b.src]) || (a.dist - b.dist); });
+  const out = [];
+  list.forEach(function (p) {
+    const dup = out.some(function (o) {
+      return haversineM_(o.lat, o.lng, p.lat, p.lng) <= POI_DUP_M && spotNameScore_(o.name, p.name) >= 0.8;
+    });
+    if (!dup) out.push(p);
+  });
+  if (q) {
+    out.forEach(function (p) { p.score = spotNameScore_(q, p.name); });
+    out.sort(function (a, b) { return (b.score - a.score) || (a.dist - b.dist); });
+    out.forEach(function (p) { delete p.score; });
+  } else {
+    out.sort(function (a, b) { return a.dist - b.dist; });
+  }
+  return out.slice(0, q ? 10 : 20);
+}
+
+// Overpass: 名前のある店・施設・観光・公園・史跡・駅。relation は重いので外す(元の縁泉の実測: 密集地で 504)
+function overpassProvider_(endpoint) {
+  return {
+    name: 'osm',
+    request: function (lat, lng, radius, q) {
+      const around = 'around:' + radius + ',' + lat + ',' + lng;
+      let body;
+      if (q) {
+        const re = q.replace(/[\\"]/g, '').replace(/[.^$|?*+()\[\]{}]/g, '.'); // 正規表現の記号は「何か1文字」に
+        body = 'nw(' + around + ')["name"~"' + re + '",i];nw(' + around + ')["name:ja"~"' + re + '",i];';
+      } else {
+        body = ['amenity', 'shop', 'tourism', 'leisure', 'historic', 'craft', 'office'].map(function (k) { return 'nw(' + around + ')[name][' + k + '];'; }).join('') +
+          'nw(' + around + ')[name][railway=station];nw(' + around + ')[name][building=temple];nw(' + around + ')[name][building=shrine];';
+      }
+      return { url: endpoint, method: 'post', payload: { data: '[out:json][timeout:20];(' + body + ');out center 60;' }, muteHttpExceptions: true };
+    },
+    parse: function (text) {
+      const j = JSON.parse(text);
+      return (j.elements || []).map(function (e) {
+        const c = e.center || e, t = e.tags || {};
+        const k = ['amenity', 'shop', 'tourism', 'leisure', 'historic', 'railway', 'craft', 'office', 'building'].filter(function (x) { return t[x]; })[0];
+        return { id: 'osm:' + e.type + '/' + e.id, src: 'osm', name: t['name:ja'] || t.name, lat: Number(c.lat), lng: Number(c.lon), category: k ? k + '=' + t[k] : '' };
+      });
+    },
+  };
+}
+
+// Google Places(New)。FieldMask は最小(料金はフィールドで決まる。displayName が入るので Pro 枠、月5,000回まで無料)
+function googleProvider_(key) {
+  return {
+    name: 'google',
+    request: function (lat, lng, radius, q) {
+      const circle = { circle: { center: { latitude: lat, longitude: lng }, radius: radius } };
+      const payload = q
+        ? { textQuery: q, languageCode: 'ja', regionCode: 'JP', maxResultCount: 10, locationBias: circle }
+        : { locationRestriction: circle, maxResultCount: 20, languageCode: 'ja', rankPreference: 'DISTANCE' };
+      return {
+        url: 'https://places.googleapis.com/v1/places:' + (q ? 'searchText' : 'searchNearby'),
+        method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+        headers: { 'X-Goog-Api-Key': key, 'X-Goog-FieldMask': 'places.id,places.displayName,places.location,places.primaryType' },
+        payload: JSON.stringify(payload),
+      };
+    },
+    parse: function (text) {
+      return (JSON.parse(text).places || []).map(function (p) {
+        return { id: 'google:' + p.id, src: 'google', name: p.displayName && p.displayName.text, lat: p.location && Number(p.location.latitude), lng: p.location && Number(p.location.longitude), category: p.primaryType ? 'google=' + p.primaryType : '' };
+      });
+    },
+  };
 }
 
 // ========== 小さな道具 ==========

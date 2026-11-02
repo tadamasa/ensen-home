@@ -179,22 +179,7 @@ function osmLookup_(s) {
 }
 
 // ---------- 判定 ----------
-// 名前の近さ: 記号・空白・かっこの中を除いて、最長の共通部分 / 長い方の長さ(包含は1)
-function spotNameScore_(a, b) {
-  const clean = function (x) { return String(x || '').normalize('NFKC').toLowerCase().replace(/[(\[（【].*?[)\]）】]/g, '').replace(/[\s・\-‐ー―〜~'’".,、。!！?？&＆/／]/g, ''); };
-  a = clean(a); b = clean(b);
-  if (!a || !b) return 0;
-  if (a === b) return 1;
-  const short = a.length <= b.length ? a : b, long = a.length <= b.length ? b : a;
-  if (short.length >= 3 && long.indexOf(short) >= 0) return Math.max(0.8, short.length / long.length);
-  let best = 0;
-  for (let i = 0; i < a.length; i++) for (let j = 0; j < b.length; j++) {
-    let k = 0;
-    while (i + k < a.length && j + k < b.length && a.charAt(i + k) === b.charAt(j + k)) k++;
-    if (k > best) best = k;
-  }
-  return best / long.length;
-}
+// 名前の近さ spotNameScore_ は Code.gs にある(結ぶ画面の近くの場所でも使う)
 function judgeSpot_(s, cands) {
   const none = { lat: '', lng: '', src: '', found_name: '', dist: '', agree: 0, verdict: 'unknown' };
   // 名前が似ている候補だけ。照会先ごとに今の点にいちばん近いもの

@@ -213,3 +213,14 @@ test('霧の中へ: ブクログ由来の読みたいを見分け、読書メモ
     'B000PTYQZ6,4959241933119,"デジャヴ, ""特別版""",open',
   ].join('\r\n') + '\r\n');
 });
+
+test('近くの場所: 種類を一語に、台帳と重なる候補は除く', async () => {
+  const { poiLabel, poiChoices } = await import('../js/ensen.js');
+  assert.equal(poiLabel('amenity=cafe'), 'カフェ');
+  assert.equal(poiLabel('google=ramen_restaurant'), '飲食店');
+  assert.equal(poiLabel('google=pet_store'), '店');
+  assert.equal(poiLabel('craft=brewery'), '');
+  const near = [{ name: '吹田市立中央図書館', poi: '' }, { name: 'いつもの喫茶', poi: 'osm:node/5' }];
+  const poi = [{ id: 'osm:node/1', name: '吹田市立 中央図書館' }, { id: 'osm:node/5', name: 'Kissa' }, { id: 'osm:node/7', name: '公園' }];
+  assert.deepEqual(poiChoices(near, poi).map(x => x.id), ['osm:node/7']);
+});

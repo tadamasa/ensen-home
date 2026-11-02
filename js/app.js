@@ -6,13 +6,13 @@ import { exportData, importData } from './backup.js';
 import {
   TYPES, VERBS, ORIGINS, TYPE_KEY, TYPE_ICON, VERB_ICON, VERB_ORDER, VERB_TIPS,
   esc, uuid, haversine, isoLocal, today, isDate, dayOf, timeOf, toInputValue, fromInputValue, shiftMonth, monthCells, dateLabel, gapLabel, autoSeason,
-  findActant, suggestVerb, nearbyPlaces, nameChips, isHomeMove, homeKind, echoOf,
+  findActant, suggestVerb, nearbyPlaces, nameChips, poiLabel, poiChoices, isHomeMove, homeKind, echoOf,
   frontier, reunions, apprQueue, placeNameFor, isBooklogIntent, booklogCsv, READING_MEMO_URL, latestSpotFixes, applySpotFixes, spotSuspects, spotCandidates, yearReview, yearStory, yearsOf, SEASONS, meshBounds, latestWeight, mapPoints, distantCandidates, distantPrompt, parseDistant, parseExif,
 } from './ensen.js';
 
 // ---------- 状態 ----------
 const state = { marks: {}, events: [], intents: [], appraisals: [], actants: [], traces: [], around: {}, look: 'map', appr: null, pair: null, frontierOrder: 'new', frontierShown: 150, fogOrder: 'old', map: { period: '1y', off: new Set() } };
-const blankForm = () => ({ mode: 'event', ts: '', lat: null, lng: null, gps: null, place: '', placeTouched: false, type: null, name: '', verb: null, verbAuto: true, verbsOpen: false, star: false, note: '', photo: '', photoThumb: '', exif: null, trace_id: '', intent_id: '', poi: null, what: '', origin: null, originName: '', itype: null });
+const blankForm = () => ({ mode: 'event', ts: '', lat: null, lng: null, gps: null, place: '', placeTouched: false, type: null, name: '', verb: null, verbAuto: true, verbsOpen: false, star: false, note: '', photo: '', photoThumb: '', exif: null, trace_id: '', intent_id: '', poi: null, poiKey: '', poiBusy: false, poiFrom: null, poiRadius: 300, poiProviders: [], found: null, foundKey: '', foundBusy: false, poiId: '', poiName: '', pickOpen: false, what: '', origin: null, originName: '', itype: null });
 let form = blankForm();
 const $view = document.getElementById('view');
 const kcls = t => `t-${TYPE_KEY[t] || 'person'}`;
@@ -363,13 +363,79 @@ async function revGeocode(lat, lng) {
     if (el && !el.value) el.value = form.place;
   } catch { /* 手入力で */ }
 }
-async function loadPoi() {
-  const p = form.gps;
-  if (!p || !sync.enabled() || form.poi) return;
-  form.poi = [];
-  const timeout = new Promise(r => setTimeout(() => r(null), 2500)); // 間に合わなければ静かに諦める
-  const r = await Promise.race([sync.ask('poi', { lat: p.lat, lng: p.lng }).catch(() => null), timeout]);
-  if (r && r.poi) { form.poi = r.poi; if (location.hash.startsWith('#record') && form.type === '場所') paintRecordParts(); }
+// 外の地図(OSM・Google)の近くの候補。位置か半径が変わったら引き直す。待たせない(届いたら描き直す)
+// 候補を選ぶと記録の位置はその店に移るが、候補は「選ぶ前の位置」のまわりのまま(poiFrom)
+function poiCenter() { return form.poiFrom || curPos(); }
+async function loadPoi(q = '') {
+  const p = poiCenter();
+  if (p.lat == null || !sync.enabled()) return;
+  const slot = q ? 'found' : 'poi';
+  const key = `${p.lat.toFixed(3)},${p.lng.toFixed(3)},${q ? `q:${q}` : form.poiRadius}`;
+  if (form[slot + 'Key'] === key) return;
+  Object.assign(form, { [slot + 'Key']: key, [slot]: null, [slot + 'Busy']: true });
+  if (q) paintRecordParts();
+  const r = await sync.ask('poi', { lat: p.lat, lng: p.lng, radius: form.poiRadius, q }).catch(() => null);
+  if (form[slot + 'Key'] !== key) return; // その間に場所が変わった
+  form[slot] = (r && r.poi) || [];
+  form[slot + 'Busy'] = false;
+  if (r && r.providers) form.poiProviders = r.providers;
+  if (location.hash.startsWith('#record') && form.type === '場所') { paintRecordParts(); drawPick(); }
+}
+// 候補を採る: 名前と位置をその場所に。外の地図の候補ならIDも持って行く(台帳が同じ場所だと覚える)
+function choosePlace(c) {
+  if (!form.poiFrom && curPos().lat != null) form.poiFrom = { ...curPos() };
+  form.name = c.name;
+  if (c.lat != null && isFinite(c.lat)) { form.lat = Number(c.lat); form.lng = Number(c.lng); }
+  form.poiId = c.src ? (c.id || '') : (c.poi || ''); // 台帳の場所は、覚えている地図のIDがあればそれ
+  form.poiName = c.name;
+  if (!form.placeTouched) { form.place = c.name; const el = document.getElementById('f-place'); if (el) el.value = form.place; }
+  const el = document.getElementById('f-name'); if (el) el.value = form.name;
+  paintRecordParts(); drawPick();
+}
+function unchoosePlace() { // 選ぶ前の位置に戻す
+  const f = form.poiFrom;
+  if (f && form.gps && f.lat === form.gps.lat && f.lng === form.gps.lng) form.lat = form.lng = null;
+  else if (f) { form.lat = f.lat; form.lng = f.lng; }
+  Object.assign(form, { poiId: '', poiName: '', poiFrom: null });
+  paintRecordParts(); drawPick();
+}
+
+// ---- 地図で選ぶ(結ぶ画面の小さな地図。台帳の場所と OSM の候補を置く。押した点を採る) ----
+// Google の候補は規約で Google 以外の地図に重ねられないので、地図には出さず一覧だけに出す
+let pick = null;
+function drawPick() {
+  const el = document.getElementById('f-pickmap');
+  if (!el || !form.pickOpen) { if (pick) { pick.map.remove(); pick = null; } return; }
+  loadLeaflet().then(L => {
+    if (!document.getElementById('f-pickmap')) return;
+    const c = poiCenter();
+    if (c.lat == null) return;
+    if (!pick || pick.el !== el) {
+      if (pick) pick.map.remove();
+      const map = L.map(el, { zoomControl: false, attributionControl: false }).setView([c.lat, c.lng], 17);
+      L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png', { maxZoom: 18 }).addTo(map);
+      pick = { el, map, layer: L.layerGroup().addTo(map) };
+      map.on('click', e => { // 何もないところを押したら、その点を記録の位置に(名前はそのまま)
+        if (!form.poiFrom) form.poiFrom = { ...poiCenter() };
+        form.lat = Math.round(e.latlng.lat * 1e6) / 1e6; form.lng = Math.round(e.latlng.lng * 1e6) / 1e6; form.poiId = ''; form.poiName = '';
+        paintRecordParts(); drawPick();
+      });
+    }
+    const { map, layer } = pick;
+    layer.clearLayers();
+    L.marker([c.lat, c.lng], { icon: meIcon(L), interactive: false }).addTo(layer);
+    const sel = curPos();
+    const near = nearbyPlaces(state.actants, c.lat, c.lng).slice(0, 12);
+    const add = (x, cls, label) => {
+      const on = form.poiId ? form.poiId === (x.id || x.poi) : (form.name === x.name && sel.lat === x.lat);
+      L.marker([x.lat, x.lng], { icon: L.divIcon({ html: `<div class="pk ${cls}${on ? ' is-on' : ''}"><i></i><span>${esc(x.name)}</span></div>`, className: '', iconSize: [0, 0], iconAnchor: [7, 7] }), title: x.name, keyboard: true, alt: label })
+        .addTo(layer).on('click', ev => { L.DomEvent.stopPropagation(ev); choosePlace(x); });
+    };
+    near.forEach(a => add(a, 'pk--mine', '前に結んだ場所'));
+    poiChoices(near, form.poi, 30).concat(form.found || []).filter(x => x.src !== 'google').forEach(x => add(x, '', poiLabel(x.category)));
+    if (sel.lat != null && !(form.poiId) && (sel.lat !== c.lat || sel.lng !== c.lng)) L.marker([sel.lat, sel.lng], { icon: L.divIcon({ html: '<div class="pk pk--drop is-on"><i></i><span>ここ</span></div>', className: '', iconSize: [0, 0], iconAnchor: [7, 7] }), interactive: false }).addTo(layer);
+    setTimeout(() => { map.invalidateSize(); if (sel.lat != null) map.panInside([sel.lat, sel.lng], { padding: [40, 40] }); }, 0);
+  }).catch(() => {});
 }
 
 function typeButtons(selected, attr) {
@@ -431,6 +497,7 @@ function paintEventForm() {
     <div class="card" style="margin-top:var(--space-3)">
       <input id="f-name" class="field field--name" type="text" placeholder="なにと出会った？" value="${esc(form.name)}" autocomplete="off" aria-label="名前">
       <div class="match" id="f-match" aria-live="polite"></div>
+      <div class="find" id="f-find"></div>
       <div class="chips" id="f-names"></div>
     </div>
     <div class="sect">どんなご縁</div>
@@ -478,12 +545,27 @@ function paintRecordParts(fromTyping = false) {
   // 名前の候補
   let chips = '';
   if (form.type === '場所') {
-    const p = curPos();
-    const near = nearbyPlaces(state.actants, p.lat, p.lng).slice(0, 6);
-    const seen = new Set(near.map(a => a.name));
-    const poi = (form.poi || []).filter(x => !seen.has(x.name)).slice(0, 6);
-    if (near.length) chips += `<span class="chips-label">近くの、前に結んだ場所</span>${near.map(a => `<button class="chip" data-name="${esc(a.name)}" data-lat="${a.lat}" data-lng="${a.lng}">${esc(a.name)} <small>${a.dist}m</small></button>`).join('')}`;
-    if (poi.length) chips += `<span class="chips-label">近くの場所</span>${poi.map(x => `<button class="chip" data-name="${esc(x.name)}" data-lat="${x.lat}" data-lng="${x.lng}">${esc(x.name)}</button>`).join('')}`;
+    const c = poiCenter();
+    const near = nearbyPlaces(state.actants, c.lat, c.lng).slice(0, 6);
+    const poi = poiChoices(near, form.poi);
+    const kind = x => { const k = poiLabel(x.category); return k ? `<small>${esc(k)}・${x.dist}m</small>` : `<small>${x.dist}m</small>`; };
+    const on = x => (form.poiId && form.poiId === (x.id || x.poi)) || (!form.poiId && form.name === x.name && form.lat === x.lat) ? ' is-active' : '';
+    const chip = (x, i, list) => `<button class="chip${on(x)}" data-pick="${list}:${i}">${esc(x.name)} ${list === 'near' ? `<small>${x.dist}m</small>` : kind(x)}</button>`;
+    if (form.poiFrom) chips += `<div class="picked" role="status">${glyph('i-pin', '')}<span><b>${esc(form.poiName || '地図で選んだところ')}</b> の位置で結びます</span><button class="btn btn--plain btn--small" id="f-unpick" aria-label="選んだ場所を外す">外す</button></div>`;
+    if (near.length) chips += `<span class="chips-label">近くの、前に結んだ場所</span>${near.map((x, i) => chip(x, i, 'near')).join('')}`;
+    if (sync.enabled() && c.lat != null) {
+      chips += `<span class="chips-label">近くの場所${form.poiBusy ? '<span class="poi-wait">さがしています…</span>' : ''}</span>`;
+      chips += poi.map((x, i) => chip(x, i, 'poi')).join('');
+      if (!form.poiBusy && form.poi && !poi.length) chips += `<span class="small muted">${form.poiRadius}m 以内に見つかりませんでした</span>`;
+      if (form.found || form.foundBusy) {
+        chips += `<span class="chips-label">「${esc(form.foundKey.split(',q:')[1] || '')}」で探した場所${form.foundBusy ? '<span class="poi-wait">さがしています…</span>' : ''}</span>`;
+        chips += (form.found || []).map((x, i) => chip(x, i, 'found')).join('') || (form.foundBusy ? '' : '<span class="small muted">5km 以内に見つかりませんでした</span>');
+      }
+      chips += `<div class="poi-tools">${form.poiRadius < 1000 ? '<button class="chip chip--ghost" id="f-wider">もっと広く</button>' : ''}<button class="chip chip--ghost" id="f-pick" aria-expanded="${form.pickOpen}">${form.pickOpen ? '地図をとじる' : '地図で選ぶ'}</button></div>`;
+      if (form.pickOpen) chips += '<div class="pick-wrap"><div id="f-pickmap" role="application" aria-label="結ぶ場所を地図で選ぶ"></div><p class="hint" style="margin:var(--space-1) 0 0">点を押すとその場所に。何もないところを押すと、その位置で結びます。</p></div>';
+      const by = (form.poiProviders || []).map(x => ({ osm: '© OpenStreetMap contributors', google: 'Google Maps' })[x]).filter(Boolean);
+      if (by.length && (form.poi || form.found)) chips += `<p class="credit" style="margin:var(--space-1) 0 0;width:100%">候補: ${by.join('・')}</p>`;
+    }
   } else if (form.type) {
     const { recent, often } = nameChips(state.actants, form.type);
     if (recent.length) chips += `<span class="chips-label">最近</span>${recent.map(a => `<button class="chip" data-name="${esc(a.name)}">${esc(a.name)}</button>`).join('')}`;
@@ -493,19 +575,36 @@ function paintRecordParts(fromTyping = false) {
     $('f-names').innerHTML = chips;
     $('f-names').querySelectorAll('[data-name]').forEach(b => b.addEventListener('click', () => {
       form.name = b.dataset.name; $('f-name').value = form.name;
-      if (b.dataset.lat && b.dataset.lat !== 'null' && b.dataset.lat !== 'undefined') {
-        // 候補の地点を採る(GPSの誤差を吸収)。場所の名前も合わせる
-        form.lat = Number(b.dataset.lat); form.lng = Number(b.dataset.lng);
-        if (!form.placeTouched) { form.place = form.name; $('f-place').value = form.place; }
-      }
       paintRecordParts();
     }));
+    if (form.type === '場所') {
+      const c = poiCenter();
+      const near = nearbyPlaces(state.actants, c.lat, c.lng).slice(0, 6);
+      const lists = { near, poi: poiChoices(near, form.poi), found: form.found || [] };
+      $('f-names').querySelectorAll('[data-pick]').forEach(b => b.addEventListener('click', () => {
+        const [l, i] = b.dataset.pick.split(':');
+        const x = lists[l] && lists[l][Number(i)];
+        if (x) choosePlace(x);
+      }));
+      if ($('f-unpick')) $('f-unpick').addEventListener('click', unchoosePlace);
+      if ($('f-wider')) $('f-wider').addEventListener('click', () => { form.poiRadius = form.poiRadius < 600 ? 600 : 1000; loadPoi(); paintRecordParts(); });
+      if ($('f-pick')) $('f-pick').addEventListener('click', () => { form.pickOpen = !form.pickOpen; paintRecordParts(); });
+      drawPick();
+    }
+  }
+  // 名前で探す(店を出てから結ぶとき。近くの候補に無い名前を打ったら出す)
+  const fb = $('f-find');
+  if (fb) {
+    const q = form.name.trim();
+    const listed = form.type === '場所' && q.length >= 2 && sync.enabled() && poiCenter().lat != null && !form.poiId;
+    fb.innerHTML = listed && !String(form.foundKey).endsWith(`q:${q}`) ? `<button class="btn btn--plain btn--small" id="f-find-go" style="color:var(--color-accent)">「${esc(q)}」を近くで探す</button>` : '';
+    if ($('f-find-go')) $('f-find-go').addEventListener('click', () => loadPoi(q));
   }
   // 位置の出どころ
   const pl = $('f-photoloc');
   if (pl) pl.innerHTML = form.exif && form.exif.lat != null && form.lat === form.exif.lat
     ? '<div class="row small"><span class="muted">写真の撮影地を使っています</span><button class="btn btn--plain btn--small" id="f-here" style="margin-left:auto;color:var(--color-accent)">現在地に戻す</button></div>' : '';
-  if ($('f-here')) $('f-here').addEventListener('click', () => { form.lat = form.lng = null; form.placeTouched = false; form.place = ''; $('f-place').value = ''; if (form.gps) revGeocode(form.gps.lat, form.gps.lng); paintRecordParts(); });
+  if ($('f-here')) $('f-here').addEventListener('click', () => { form.lat = form.lng = null; Object.assign(form, { poiId: '', poiName: '', poiFrom: null }); form.placeTouched = false; form.place = ''; $('f-place').value = ''; if (form.gps) revGeocode(form.gps.lat, form.gps.lng); paintRecordParts(); });
   // 動詞(種別ごとに並べ替えるだけ。語彙は7語のまま)
   const order = form.type ? VERB_ORDER[form.type] : { main: VERBS, rest: [] };
   const list = form.verbsOpen ? order.main.concat(order.rest) : order.main;
@@ -536,7 +635,7 @@ async function attachPhoto(file) {
     form.photoThumb = shrink(360, 0.7);
     form.exif = ex;
     if (ex && ex.date && !form.ts) form.ts = isoLocal(ex.date);
-    if (ex && ex.lat != null) { form.lat = ex.lat; form.lng = ex.lng; form.placeTouched = false; form.place = ''; revGeocode(ex.lat, ex.lng); }
+    if (ex && ex.lat != null) { form.lat = ex.lat; form.lng = ex.lng; Object.assign(form, { poiId: '', poiName: '', poiFrom: null }); form.placeTouched = false; form.place = ''; revGeocode(ex.lat, ex.lng); if (form.type === '場所') loadPoi(); }
     paintEventForm();
     if (ex && (ex.date || ex.lat != null)) toast('写真の撮影日時・撮影地を使います');
   } catch (e) { toast(`写真を読めませんでした: ${e.message}`); }
@@ -551,7 +650,7 @@ async function saveEvent() {
     id: uuid(), ts: form.ts || now, recorded_ts: now,
     lat: p.lat, lng: p.lng, place: form.place.trim(),
     type: form.type, name: form.name.trim(), aid: m ? m.id : '', verb: form.verb || suggestVerb(form.type, m),
-    note: form.note.trim(), star: form.star, tags: '', source: 'home', trace_id: form.trace_id || '',
+    note: form.note.trim(), star: form.star, tags: '', source: 'home', trace_id: form.trace_id || '', poi_id: form.type === '場所' ? form.poiId : '',
     media: '', photo: form.photo || '', photoThumb: form.trace_id ? '' : (form.photoThumb || ''), pending: true,
   };
   await db.put('events', rec);
