@@ -260,3 +260,11 @@ test('Photon(OSM の検索)の問い合わせと読み方、候補の重ね方',
   ]);
   assert.deepEqual(merged.map(p => p.id), ['osm:node/1', 'google:b', 'osm:way/2']);
 });
+
+test('Google Places(端末から)の読み方', async () => {
+  const { parsePlaces } = await import('../js/places.js');
+  assert.deepEqual(parsePlaces({ places: [
+    { id: 'ChIJa', displayName: { text: '喫茶 ほとり' }, location: { latitude: 35, longitude: 139 }, primaryType: 'cafe' },
+    { id: 'ChIJb', displayName: { text: '' }, location: { latitude: 35, longitude: 139 } },
+  ] }), [{ id: 'google:ChIJa', src: 'google', name: '喫茶 ほとり', lat: 35, lng: 139, category: 'google=cafe' }]);
+});
