@@ -38,6 +38,7 @@ export function makeBook() {
       sh.api = {
         getRange: range,
         getLastRow: lastRow,
+        getLastColumn: () => Math.max(0, ...sh.rows.slice(0, lastRow()).map(x => (x || []).length)),
         getMaxRows: () => sh.maxRows,
         insertRowsAfter: (_, n) => { sh.maxRows += n; },
         setFrozenRows() {},
@@ -56,6 +57,15 @@ function formatDate(d, _tz, f) {
   // テストは TZ=Asia/Tokyo で動かす想定。XXX は +09:00 固定
   return f.replace(/'T'/g, 'T').replace('yyyy', d.getFullYear()).replace('MM', pad(d.getMonth() + 1)).replace('dd', pad(d.getDate()))
     .replace('HH', pad(d.getHours())).replace('mm', pad(d.getMinutes())).replace('ss', pad(d.getSeconds())).replace('XXX', '+09:00');
+}
+
+// ライブラリ DayReaders を、呼ぶ側と同じ SpreadsheetApp・Utilities で別の場所に読み込む。Apps Script と同じく DayReaders.関数名 で見える。
+// tests/lib/DayReaders.gs は tadamasa/diary-home の lib/day-readers/DayReaders.gs の写し(hub/appsscript.json で固定している版と同じもの)
+export function loadReaders(ctx) {
+  const lib = { SpreadsheetApp: ctx.SpreadsheetApp, Utilities: ctx.Utilities, Date, Math, JSON, String, Number, Array, Object, encodeURIComponent };
+  vm.createContext(lib);
+  vm.runInContext(fs.readFileSync(new URL('./lib/DayReaders.gs', import.meta.url), 'utf8'), lib);
+  return lib;
 }
 
 export function loadHub(opts = {}) {
@@ -94,8 +104,9 @@ export function loadHub(opts = {}) {
     Logger: { log() {} },
     Date, Math, JSON, String, Number, Array, Object, isFinite, isNaN,
   };
+  if (opts.withReaders !== false) ctx.DayReaders = loadReaders(ctx);
   vm.createContext(ctx);
-  vm.runInContext(fs.readFileSync(new URL('../hub/Code.gs', import.meta.url), 'utf8') + '\n' + fs.readFileSync(new URL('../hub/SpotMatch.gs', import.meta.url), 'utf8'), ctx);
+  vm.runInContext((opts.code || fs.readFileSync(new URL('../hub/Code.gs', import.meta.url), 'utf8')) + '\n' + fs.readFileSync(new URL('../hub/SpotMatch.gs', import.meta.url), 'utf8'), ctx);
   ctx.setup();
   const sheet = n => ensen.getSheetByName(n);
   // 縁泉GASの書き方(appendRow)をまねる
@@ -117,7 +128,7 @@ export function loadHub(opts = {}) {
     },
     intent: (row = {}) => {
       const id = row.id || `in-${++uuid}`;
-      sheet('intents').appendRow([id, '2026-09-01T09:00:00+09:00', row.what || '読みたい本', row.type || '作品', row.origin || '本', '', row.status || 'open', '', '']);
+      sheet('intents').appendRow([id, '2026-09-01T09:00:00+09:00', row.what || '読みたい本', row.type || '作品', row.origin ?? '本', '', row.status || 'open', '', row.enrich || '']);
       return id;
     },
   };

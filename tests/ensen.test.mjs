@@ -181,3 +181,35 @@ test('置き直す先の候補: ほかの回の位置と、その日に撮った
   assert.equal(c[0].kind, 'photo'); assert.equal(c[0].lat, 34.7827); // 縁の時刻に近い方
   assert.match(c[0].label, /^18:20の写真・TOHOのあたり$/);
 });
+
+test('スポットの位置の修正: ts が同じ秒なら、後に追記された行(seq が大きい・まだ表にない)が勝つ', async () => {
+  const { latestSpotFixes } = await import('../js/ensen.js');
+  const T = '2026-11-02T10:00:00+09:00';
+  const rows = [
+    { id: 'x2', ts: T, aid: 'a1', status: 'hide', seq: 5 },
+    { id: 'x1', ts: T, aid: 'a1', status: 'move', lat: 1, lng: 1, seq: 3 },
+  ];
+  assert.equal(latestSpotFixes(rows).get('a1').id, 'x2'); // 並びが逆でも表の下の行
+  assert.equal(latestSpotFixes([...rows, { id: 'local', ts: T, aid: 'a1', status: 'ok' }]).get('a1').id, 'local'); // 手元の未送信は一番後ろ
+  assert.equal(latestSpotFixes([{ id: 'p', ts: T, aid: 'a1', status: 'ok' }, { id: 'q', ts: T, aid: 'a1', status: 'hide' }]).get('a1').id, 'q'); // どちらも seq なし: 後に並んだ方
+  assert.equal(latestSpotFixes([{ id: 'new', ts: '2026-11-02T10:00:01+09:00', aid: 'a1', status: 'ok', seq: 1 }, ...rows]).get('a1').id, 'new'); // 秒が違えば ts で決まる
+});
+
+test('霧の中へ: ブクログ由来の読みたいを見分け、読書メモで突き合わせる CSV にする', async () => {
+  const { isBooklogIntent, booklogItemId, booklogCsv } = await import('../js/ensen.js');
+  const list = [
+    { id: '1', what: '仮説力を鍛える (SB新書)', src: 'booklog:4797343028:読みたい', isbn: '9784797343021', status: 'fulfilled' },
+    { id: '2', what: '造形と科学の新しい風景', src: 'booklog:B000JABQI6:読みたい', isbn: '', status: 'open' },
+    { id: '3', what: 'デジャヴ, "特別版"', src: 'booklog:B000PTYQZ6:読みたい', isbn: '4959241933119' },
+    { id: '4', what: '自分で置いた本', src: '', origin: '本', status: 'open' },
+    { id: '5', what: 'テスト', src: 'ZZTEST-booklog-want-1', status: 'open' },
+  ];
+  assert.deepEqual(list.map(isBooklogIntent), [true, true, true, false, false]);
+  assert.equal(booklogItemId(list[1]), 'B000JABQI6');
+  assert.equal(booklogCsv(list), [
+    'itemId,isbn13,title,status',
+    '4797343028,9784797343021,仮説力を鍛える (SB新書),fulfilled',
+    'B000JABQI6,,造形と科学の新しい風景,open',
+    'B000PTYQZ6,4959241933119,"デジャヴ, ""特別版""",open',
+  ].join('\r\n') + '\r\n');
+});

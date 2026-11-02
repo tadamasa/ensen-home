@@ -252,7 +252,26 @@ function pushPlaceName_(st, item, id) {
   addRow_(st, 'place_names', id, row.map(unsafe_), item.mtime);
 }
 
-// スポットの位置の修正: 台帳(actant_id)ごとに、いちばん新しい行が効く。
+// spot_fixes の ts の約束(読む相手=縁泉アプリ・旅先との約束。hub/README.md):
+//   yyyy-MM-dd'T'HH:mm:ss+09:00(東京時間・秒まで・ミリ秒なし・オフセットは必ず +09:00)。読む側は文字列のまま大小を比べる。
+//   いったん Date にしてから書き直す。Z・ミリ秒付き・ほかのオフセットも東京時間に直す。オフセットのない文字列は東京時間とみなす。
+//   読めない値・空は受け取った時刻にする。spot_fixes に書く経路(ここと SpotMatch.gs)はすべてこの関数を通す。
+function spotTs_(v) {
+  let d = null;
+  if (v instanceof Date) d = v;
+  else {
+    const s = String(v == null ? '' : v).trim();
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?$/);
+    if (m) {
+      const off = !m[7] ? '+09:00' : m[7] === 'Z' ? 'Z' : m[7].length === 5 ? m[7].slice(0, 3) + ':' + m[7].slice(3) : m[7];
+      d = new Date(m[1] + '-' + m[2] + '-' + m[3] + 'T' + m[4] + ':' + m[5] + ':' + (m[6] || '00') + off);
+    }
+  }
+  if (!d || isNaN(d.getTime())) d = new Date();
+  return Utilities.formatDate(d, TIMEZONE, "yyyy-MM-dd'T'HH:mm:ssXXX");
+}
+
+// スポットの位置の修正: 台帳(actant_id)ごとに、いちばん新しい行が効く。ts が同じ秒なら、後に追記された行(下の行)が勝つ。
 // move=lat/lngへ置き直す / hide=位置不明 / ok=確かめた / undo=元に戻す
 function pushSpotFix_(st, item, id) {
   if (st.byId.spot_fixes[id] !== undefined) return; // 追記専用
@@ -268,7 +287,7 @@ function pushSpotFix_(st, item, id) {
     if (sh.getLastRow() === 0) sh.appendRow(SPOT_FIXES_HEADERS);
     st.sheets.spot_fixes = sh;
   }
-  const row = [id, isoOr_(p.ts, isoNow_()), safe_(String(p.aid)), safe_(String(p.event_id || '')), status === 'move' ? lat : '', status === 'move' ? lng : '', status, 'home'];
+  const row = [id, spotTs_(p.ts), safe_(String(p.aid)), safe_(String(p.event_id || '')), status === 'move' ? lat : '', status === 'move' ? lng : '', status, 'home'];
   st.sheets.spot_fixes.appendRow(row);
   addRow_(st, 'spot_fixes', id, row.map(unsafe_), item.mtime);
 }
@@ -340,6 +359,7 @@ function itemOf_(st, lrow) {
   const ri = st.byId[kind] ? st.byId[kind][id] : undefined;
   if (lrow[4] === 'true' || ri === undefined) return { item: { kind: kind, id: id, mtime: Number(lrow[3]), deleted: true }, size: 60 };
   const data = dataOf_(kind, st.rows[kind][ri]);
+  if (kind === 'spot_fixes') data.seq = ri + 2;
   const item = { kind: kind, id: id, mtime: Number(lrow[3]), deleted: false, data: data };
   return { item: item, size: JSON.stringify(data).length + (kind === 'traces' ? 40000 : 0) };
 }
@@ -352,7 +372,11 @@ function dataOf_(kind, r) {
     const m = en.match(/"trace_id"\s*:\s*"([^"]+)"/);
     return { id: s(r[0]), ts: isoString_(r[1]), recorded_ts: isoString_(r[2]), lat: n(r[3]), lng: n(r[4]), place: s(r[5]), type: s(r[6]), name: s(r[7]), aid: s(r[8]), verb: s(r[9]), note: s(r[10]), media: s(r[11]), star: r[12] === 1 || s(r[12]) === '1' || r[12] === true, source: s(r[13]), tags: s(r[14]), trace_id: m ? m[1] : '', enrich: en.length > 4000 ? '' : en };
   }
-  if (kind === 'intents') return { id: s(r[0]), ts: isoString_(r[1]), what: s(r[2]), type: s(r[3]), origin: s(r[4]), origin_name: s(r[5]), status: s(r[6]) || 'open', fulfilled_event_id: s(r[7]), isbn: (parseJson_(r[8]).keys || {}).isbn || '' };
+  if (kind === 'intents') {
+    const en = parseJson_(r[8]);
+    // src: 取込元の印(ブクログ取込は booklog:<itemId>:読みたい)。アプリは booklog: のものを「読書メモで管理している読みたい」に分ける
+    return { id: s(r[0]), ts: isoString_(r[1]), what: s(r[2]), type: s(r[3]), origin: s(r[4]), origin_name: s(r[5]), status: s(r[6]) || 'open', fulfilled_event_id: s(r[7]), isbn: (en.keys || {}).isbn || '', src: typeof en.src_id === 'string' ? en.src_id : '' };
+  }
   if (kind === 'appraisals') return { id: s(r[0]), ts: isoString_(r[1]), target: s(r[2]), weight: Number(r[3]) || 0, note: s(r[4]) };
   if (kind === 'actants') {
     const k = parseJson_(r[4]);
@@ -376,9 +400,13 @@ function fillThumbs_(st, items) {
   });
 }
 
+// アプリへ返す形を変えた種類と、その印。印を変えると hash が変わり、次の同期で全件を送り直す
+//  intents: src(2026-11-02)/ spot_fixes: seq(2026-11-02)
+const DATA_SHAPE = { intents: '2', spot_fixes: '2' };
+
 // FNV-1a(32bit)。「変わったか」を見るだけなので軽いもので足りる
 function hashRow_(kind, r) {
-  const parts = [];
+  const parts = DATA_SHAPE[kind] ? ['shape' + DATA_SHAPE[kind]] : [];
   for (let i = 0; i < KINDS[kind].cols; i++) parts.push(r[i] instanceof Date ? isoString_(r[i]) : String(r[i] == null ? '' : r[i]));
   const str = parts.join('\u0001');
   let h = 0x811c9dc5;
@@ -404,7 +432,10 @@ function writeLedger_(sh, ledger) {
   sh.getRange(2, 1, ledger.length, LEDGER_COLS.length).setValues(ledger);
 }
 
-// ========== その日のまわり(読み取りのみ): 日記・読み終えた本・観た映画 ==========
+// ========== その日のまわり(読み取りのみ): 日記・読み終えた本・観た映画・月の印 ==========
+// 読み方は共通ライブラリ DayReaders(tadamasa/diary-home の lib/day-readers)にまとめた。日記ハブ・日記v2 も同じものを使う。
+// ここではスクリプト プロパティからシートIDとアプリURLを決めて渡すだけ。列は各シートの1行目の見出しから引く。
+// ライブラリは「ライブラリ +」で版を固定して追加する(識別子 DayReaders、版は appsscript.json と README の「他アプリとの約束」)。
 const DIARY_SHEET_ID_DEFAULT = '1yVC3q2dm4-LxrAg_lRDk8G3qqU-WNQnI5LznFPgxKp8';
 const DIARY_APP_URL_DEFAULT = 'https://tadamasa.github.io/diary-home/';
 const BOOKS_SHEET_ID_DEFAULT = '1WEsS95CKH7JPFuGf7BYzlTV-d6FyTVg0OCOymKHqsZg';
@@ -412,102 +443,32 @@ const READING_APP_URL_DEFAULT = 'https://tadamasa.github.io/reading-memo/';
 const MOVIES_SHEET_ID_DEFAULT = '156oktIUuxKOcFZn0QYrx6ncY3AFiY-7DjgAIYbiRCm4';
 const MOVIE_APP_URL_DEFAULT = 'https://tadamasa.github.io/movie-memo/';
 
+function prop_(k, d) { return PropertiesService.getScriptProperties().getProperty(k) || d; }
+
+// ライブラリが追加されていなくても同期は動く。「その日」と月の印だけが理由つきで空になる
+function readers_() {
+  if (typeof DayReaders === 'undefined') throw new Error('ライブラリ DayReaders が追加されていません(hub/README.md)');
+  return DayReaders;
+}
+function readSafe_(fn) {
+  try { return fn(readers_()); } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+}
+
 function getDay_(dateStr) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return { ok: false, error: 'bad date' };
-  return { ok: true, date: dateStr, diary: diaryFor_(dateStr), books: booksFor_(dateStr), films: filmsFor_(dateStr) };
-}
-
-function prop_(k, d) { return PropertiesService.getScriptProperties().getProperty(k) || d; }
-function toDateStr_(v) { return v instanceof Date ? Utilities.formatDate(v, TIMEZONE, 'yyyy-MM-dd') : String(v || '').trim().substring(0, 10); }
-
-// 「日記の記録」CoreData: Date, Time, Text, Feelings, Thinkings
-function diaryFor_(dateStr) {
-  try {
-    const sh = SpreadsheetApp.openById(prop_('DIARY_SHEET_ID', DIARY_SHEET_ID_DEFAULT)).getSheetByName('CoreData');
-    const last = sh.getLastRow();
-    const rows = last < 2 ? [] : sh.getRange(2, 1, last - 1, 5).getValues();
-    const out = [];
-    rows.forEach(function (r) {
-      if (toDateStr_(r[0]) !== dateStr || !String(r[2] || '').trim()) return;
-      const t = r[1] instanceof Date ? Utilities.formatDate(r[1], TIMEZONE, 'HH:mm') : String(r[1] || '').trim().slice(0, 5);
-      out.push({ time: t, text: String(r[2]), feelings: String(r[3] || '') });
-    });
-    out.sort(function (a, b) { return a.time < b.time ? -1 : 1; });
-    return { ok: true, url: prop_('DIARY_APP_URL', DIARY_APP_URL_DEFAULT) + '#day/' + dateStr, entries: out };
-  } catch (e) { return { ok: false, error: String(e) }; }
-}
-
-// 読書ハブ books: id, rev, mtime, deleted, title, author, status, category, score, finishedAt, json
-function booksFor_(dateStr) {
-  try {
-    const sh = SpreadsheetApp.openById(prop_('BOOKS_SHEET_ID', BOOKS_SHEET_ID_DEFAULT)).getSheetByName('books');
-    const last = sh.getLastRow();
-    const rows = last < 2 ? [] : sh.getRange(2, 1, last - 1, 11).getValues();
-    const app = prop_('READING_APP_URL', READING_APP_URL_DEFAULT);
-    const out = [];
-    rows.forEach(function (r) {
-      if (String(r[3]).toLowerCase() === 'true' || String(r[6]) !== '読了' || toDateStr_(r[9]) !== dateStr) return;
-      out.push({ title: String(r[4] || ''), author: String(r[5] || ''), cover: parseJson_(r[10]).cover || '', url: app + '#book/' + encodeURIComponent(String(r[0])) });
-    });
-    return { ok: true, books: out };
-  } catch (e) { return { ok: false, error: String(e) }; }
-}
-
-// 映画ハブ views: id, rev, mtime, deleted, date, filmId, filmTitle, place, venue, score, text, json
-// films: id, rev, mtime, deleted, title, year, directors, ..., json(posterPath, genres)。日記ハブの filmsFor_ と同じ読み方
-const FILM_PLACE_LABEL = { stream: '配信', theater: '映画館', tv: 'テレビ', disc: 'ディスク', other: 'その他' };
-function filmsFor_(dateStr) {
-  try {
-    const ss = SpreadsheetApp.openById(prop_('MOVIES_SHEET_ID', MOVIES_SHEET_ID_DEFAULT));
-    const vs = ss.getSheetByName('views');
-    const last = vs.getLastRow();
-    const rows = last < 2 ? [] : vs.getRange(2, 1, last - 1, 11).getValues();
-    const app = prop_('MOVIE_APP_URL', MOVIE_APP_URL_DEFAULT);
-    const out = [];
-    rows.forEach(function (r) {
-      if (String(r[3]).toLowerCase() === 'true' || toDateStr_(r[4]) !== dateStr) return;
-      out.push({ filmId: String(r[5]), title: String(r[6] || ''), place: FILM_PLACE_LABEL[String(r[7])] || String(r[7] || ''), venue: String(r[8] || ''), score: r[9] === '' || r[9] == null ? '' : String(r[9]), text: String(r[10] || ''), url: app + '#film/' + encodeURIComponent(String(r[5])) });
-    });
-    if (out.length) {
-      const fs = ss.getSheetByName('films');
-      const fl = fs ? fs.getLastRow() : 0;
-      const ids = fl < 2 ? [] : fs.getRange(2, 1, fl - 1, 1).getValues();
-      const want = {};
-      out.forEach(function (v) { want[v.filmId] = true; });
-      const info = {};
-      for (let i = 0; i < ids.length; i++) {
-        const id = String(ids[i][0]);
-        if (!want[id] || info[id]) continue;
-        const r = fs.getRange(i + 2, 1, 1, 10).getValues()[0];
-        const j = parseJson_(r[9]);
-        info[id] = { title: String(r[4] || ''), year: String(r[5] || ''), directors: String(r[6] || ''), poster: j.posterPath ? 'https://image.tmdb.org/t/p/w185' + j.posterPath : '' };
-      }
-      out.forEach(function (v) { const f = info[v.filmId] || {}; v.title = f.title || v.title; v.year = f.year || ''; v.directors = f.directors || ''; v.poster = f.poster || ''; });
-    }
-    return { ok: true, films: out };
-  } catch (e) { return { ok: false, error: String(e) }; }
+  return {
+    ok: true,
+    date: dateStr,
+    diary: readSafe_(function (R) { return R.diaryForDate(prop_('DIARY_SHEET_ID', DIARY_SHEET_ID_DEFAULT), dateStr, prop_('DIARY_APP_URL', DIARY_APP_URL_DEFAULT)); }),
+    books: readSafe_(function (R) { return R.booksForDate(prop_('BOOKS_SHEET_ID', BOOKS_SHEET_ID_DEFAULT), dateStr, prop_('READING_APP_URL', READING_APP_URL_DEFAULT)); }),
+    films: readSafe_(function (R) { return R.filmsForDate(prop_('MOVIES_SHEET_ID', MOVIES_SHEET_ID_DEFAULT), dateStr, prop_('MOVIE_APP_URL', MOVIE_APP_URL_DEFAULT)); }),
+  };
 }
 
 // カレンダーの印: その月に本を読み終えた日・映画を観た日
 function monthMarks_(ym) {
   if (!/^\d{4}-\d{2}$/.test(ym)) return { ok: false, error: 'bad month' };
-  const out = { ok: true, month: ym, books: [], films: [] };
-  const pick = function (rows, col, keep) {
-    const set = {};
-    rows.forEach(function (r) { const d = toDateStr_(r[col]); if (d.length === 10 && d.substring(0, 7) === ym && keep(r)) set[d] = true; });
-    return Object.keys(set).sort();
-  };
-  try {
-    const sh = SpreadsheetApp.openById(prop_('BOOKS_SHEET_ID', BOOKS_SHEET_ID_DEFAULT)).getSheetByName('books');
-    const rows = sh.getLastRow() < 2 ? [] : sh.getRange(2, 1, sh.getLastRow() - 1, 10).getValues();
-    out.books = pick(rows, 9, function (r) { return String(r[3]).toLowerCase() !== 'true' && String(r[6]) === '読了'; });
-  } catch (e) { out.booksError = String(e); }
-  try {
-    const sh = SpreadsheetApp.openById(prop_('MOVIES_SHEET_ID', MOVIES_SHEET_ID_DEFAULT)).getSheetByName('views');
-    const rows = sh.getLastRow() < 2 ? [] : sh.getRange(2, 1, sh.getLastRow() - 1, 5).getValues();
-    out.films = pick(rows, 4, function (r) { return String(r[3]).toLowerCase() !== 'true'; });
-  } catch (e) { out.filmsError = String(e); }
-  return out;
+  return readSafe_(function (R) { return R.monthMarks(prop_('BOOKS_SHEET_ID', BOOKS_SHEET_ID_DEFAULT), prop_('MOVIES_SHEET_ID', MOVIES_SHEET_ID_DEFAULT), ym); });
 }
 
 // ========== 近くの場所の候補(任意。GOOGLE_PLACES_API_KEY があるときだけ) ==========

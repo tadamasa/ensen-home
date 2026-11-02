@@ -457,14 +457,22 @@ export function placeNameFor(t, fixes) {
 // Swarm の書き出しの緯度経度は「チェックインした時の端末の位置」なので、後から家などでチェックインした分は
 // 店の位置とずれている。events の lat/lng は書き換えず、spot_fixes(追記専用)を読むときに当てる。
 // 1行 = その台帳(actant_id)の位置の決め直し。同じ台帳はいちばん新しい行が効く。
+// ts は yyyy-MM-dd'T'HH:mm:ss+09:00(ハブが書き込みの入口でそろえる)なので、文字列のまま大小を比べる。
+// ts が同じ秒なら、後に追記された行が勝つ: seq(表の何行目か。ハブが付ける)の大きい方。まだ表にない手元の行(seq なし)は一番後ろ。
 //   move: lat/lng に置き直す / hide: 位置不明(地図に出さない) / ok: 確かめた、このままでよい / undo: 元に戻す
 export const SPOT_STATUS = ['move', 'hide', 'ok', 'undo'];
+const fixSeq = f => (f.seq == null || f.seq === '' || !isFinite(Number(f.seq)) ? Infinity : Number(f.seq));
+function laterFix(f, cur) {
+  const a = String(f.ts), b = String(cur.ts);
+  if (a !== b) return a > b;
+  return fixSeq(f) >= fixSeq(cur); // 同じ秒: 後に追記された方。どちらも seq が無ければ、後に並んだ方
+}
 export function latestSpotFixes(fixes) {
   const m = new Map();
   for (const f of fixes || []) {
     if (!f || !f.aid || !SPOT_STATUS.includes(f.status)) continue;
     const cur = m.get(f.aid);
-    if (!cur || String(f.ts) > String(cur.ts)) m.set(f.aid, f);
+    if (!cur || laterFix(f, cur)) m.set(f.aid, f);
   }
   for (const [k, f] of m) if (f.status === 'undo') m.delete(k);
   return m;
@@ -571,4 +579,18 @@ export function spotCandidates(item, traces, placeNames = [], { minM = 500, max 
     add({ kind: 'photo', lat: Number(t.lat), lng: Number(t.lng), label: `${timeOf(t.ts)}の写真${nm ? `・${nm}` : ''}`, trace_id: t.id });
   }
   return out.slice(0, max);
+}
+
+// ---- 霧の中へ: ブクログ由来の「読みたい」 ----
+// 「読みたい」は読書メモ(reading-memo)に一本化した。7月のブクログ取込で intents に入った分(src が booklog: で始まる)は
+// 消さず・状態も変えず(規約6)、霧の中へのふだんの一覧から外して折りたたみに入れる。
+export const READING_MEMO_URL = 'https://tadamasa.github.io/reading-memo/';
+export const isBooklogIntent = i => /^booklog:/.test(String((i && i.src) || ''));
+// src_id = booklog:<itemId>:読みたい の <itemId>(ブクログのアイテムID。ISBN10 か ASIN)
+export const booklogItemId = i => (isBooklogIntent(i) ? String(i.src).split(':')[1] || '' : '');
+const csvCell = v => { const s = String(v == null ? '' : v); return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+// 読書メモで突き合わせる一覧。UTF-8、見出し付き。itemId の完全一致がいちばん確か(isbn13 は enrich の keys.isbn のまま。ないときは空)
+export function booklogCsv(intents) {
+  const rows = (intents || []).filter(isBooklogIntent).map(i => [booklogItemId(i), i.isbn || '', i.what || '', i.status || 'open']);
+  return [['itemId', 'isbn13', 'title', 'status'], ...rows].map(r => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
 }
