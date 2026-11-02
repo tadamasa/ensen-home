@@ -227,7 +227,8 @@ test('近くの場所: 種類を一語に、台帳と重なる候補は除く', 
 
 test('端末から直接 OSM を引くときの問い合わせと読み方', async () => {
   const { overpassQuery, parseOverpass } = await import('../js/ensen.js');
-  assert.match(overpassQuery(35, 139, 300), /around:300,35,139\)\[name\]\[amenity\]/);
+  assert.match(overpassQuery(35, 139, 300), /nw\(around:300,35,139\)\[name\]\[~"\^\(amenity\|shop/);
+  assert.equal((overpassQuery(35, 139, 300).match(/around/g) || []).length, 2); // around は2つまで(重くしない)
   assert.match(overpassQuery(35, 139, 5000, '勝盛(江坂)'), /\["name"~"勝盛.江坂.",i\]/);
   const got = parseOverpass({ elements: [
     { type: 'way', id: 2, center: { lat: 35.002, lon: 139 }, tags: { name: 'Park', 'name:ja': '公園', leisure: 'park' } },
@@ -236,4 +237,24 @@ test('端末から直接 OSM を引くときの問い合わせと読み方', asy
     { type: 'node', id: 4, lat: 35.0001, lon: 139, tags: {} },
   ] }, 35, 139, 300);
   assert.deepEqual(got.map(p => [p.id, p.name, p.category]), [['osm:node/1', '喫茶', 'amenity=cafe'], ['osm:way/2', '公園', 'leisure=park']]);
+});
+
+test('Photon(OSM の検索)の問い合わせと読み方、候補の重ね方', async () => {
+  const { photonUrl, parsePhoton, mergePoiList } = await import('../js/ensen.js');
+  assert.match(photonUrl(35, 139, 300), /\/reverse\?lat=35&lon=139&radius=0\.30&limit=40&osm_tag=amenity&osm_tag=shop/);
+  assert.match(photonUrl(35, 139, 5000, '勝盛'), /\/api\/\?q=%E5%8B%9D%E7%9B%9B&lat=35&lon=139/);
+  const got = parsePhoton({ features: [
+    { geometry: { coordinates: [139, 35.002] }, properties: { osm_type: 'W', osm_id: 2, osm_key: 'leisure', osm_value: 'park', name: '公園' } },
+    { geometry: { coordinates: [139, 35.0005] }, properties: { osm_type: 'N', osm_id: 1, osm_key: 'amenity', osm_value: 'cafe', name: '喫茶' } },
+    { geometry: { coordinates: [139, 35.0001] }, properties: { osm_type: 'W', osm_id: 9, osm_key: 'highway', osm_value: 'residential', name: '通り' } },
+    { geometry: { coordinates: [139, 35.1] }, properties: { osm_type: 'N', osm_id: 3, osm_key: 'shop', osm_value: 'bakery', name: '遠い' } },
+  ] }, 35, 139, 300);
+  assert.deepEqual(got.map(p => p.id), ['osm:node/1', 'osm:way/2']);
+  const merged = mergePoiList([
+    { id: 'google:a', src: 'google', name: '喫茶', lat: 35.0006, lng: 139, dist: 67 },
+    ...got,
+    { id: 'osm:node/1', src: 'osm', name: '喫茶', lat: 35.0005, lng: 139, dist: 56 },
+    { id: 'google:b', src: 'google', name: '古書店', lat: 35.001, lng: 139, dist: 111 },
+  ]);
+  assert.deepEqual(merged.map(p => p.id), ['osm:node/1', 'google:b', 'osm:way/2']);
 });
