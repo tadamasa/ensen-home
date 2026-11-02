@@ -514,7 +514,8 @@ const POI_SEARCH_RADIUS_M = 5000;
 const POI_CACHE_SEC = 1800;
 const POI_CACHE_VER = 'poi3';
 const POI_DUP_M = 60;
-const OVERPASS_DEFAULT = 'https://maps.mail.ru/osm/tools/overpass/api/interpreter';
+// 既定は上から順に試す(一つが落ちていても次へ)。OVERPASS_ENDPOINT を入れるとそれだけを使う
+const OVERPASS_DEFAULTS = ['https://maps.mail.ru/osm/tools/overpass/api/interpreter', 'https://overpass.private.coffee/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
 
 function nearbyPoi_(req) {
   const lat = Number(req.lat), lng = Number(req.lng);
@@ -523,35 +524,48 @@ function nearbyPoi_(req) {
   const radius = q ? POI_SEARCH_RADIUS_M : Math.max(100, Math.min(1000, Number(req.radius) || POI_RADIUS_M));
   const props = PropertiesService.getScriptProperties();
   const key = props.getProperty('GOOGLE_PLACES_API_KEY');
-  const ep = String(props.getProperty('OVERPASS_ENDPOINT') || OVERPASS_DEFAULT).trim();
+  const ep = String(props.getProperty('OVERPASS_ENDPOINT') || '').trim();
   const providers = [];
-  if (ep && ep !== 'off') providers.push(overpassProvider_(ep));
+  if (ep !== 'off') providers.push(overpassProvider_(ep ? [ep] : OVERPASS_DEFAULTS));
   if (key) providers.push(googleProvider_(key));
   if (!providers.length) return { ok: true, providers: [], provider: 'none', poi: [] };
   const names = providers.map(function (x) { return x.name; });
   const cache = CacheService.getScriptCache();
   const ck = [POI_CACHE_VER, names.join('+'), lat.toFixed(3), lng.toFixed(3), radius, q ? Utilities.base64EncodeWebSafe(q) : ''].join('_').slice(0, 240);
   const hit = cache.get(ck);
-  if (hit) { try { const j = JSON.parse(hit); j.cached = true; return j; } catch (e) {} }
-  // 照会先は並べて同時に投げる(遅い方に引きずられない)
-  const reqs = providers.map(function (x) { return x.request(lat, lng, radius, q); });
-  let resps;
-  try { resps = UrlFetchApp.fetchAll(reqs); } catch (e) { return { ok: true, providers: names, provider: names[0], poi: [], error: String(e && e.message || e).slice(0, 200) }; }
+  if (hit && !req.nocache) { try { const j = JSON.parse(hit); j.cached = true; return j; } catch (e) {} }
+  // 照会先は並べて同時に投げる(遅い方に引きずられない)。投げられなかったもの・断られたものは一つずつ控えに回す
+  const reqs = providers.map(function (x) { return x.request(lat, lng, radius, q, 0); });
+  let resps = [];
+  try { resps = UrlFetchApp.fetchAll(reqs); } catch (e) { resps = []; }
   const errors = [];
   let all = [];
   providers.forEach(function (x, i) {
-    const res = resps[i];
-    const code = res.getResponseCode();
-    if (code >= 400) { errors.push(x.name + ' ' + code); return; }
-    try { all = all.concat(x.parse(res.getContentText())); } catch (e) { errors.push(x.name + ' parse'); }
+    for (let k = 0; k < x.tries; k++) {
+      let res = k === 0 ? resps[i] : null;
+      try { if (!res) res = UrlFetchApp.fetch(x.request(lat, lng, radius, q, k).url, x.request(lat, lng, radius, q, k)); }
+      catch (e) { errors.push(x.label(k) + ' ' + String(e && e.message || e).slice(0, 80)); continue; }
+      const code = res.getResponseCode();
+      if (code >= 400) { errors.push(x.label(k) + ' ' + code); continue; }
+      try { all = all.concat(x.parse(res.getContentText())); return; } catch (e) { errors.push(x.label(k) + ' parse'); }
+    }
   });
   const poi = mergePoi_(all.filter(function (p) { return p && p.name && isFinite(p.lat) && isFinite(p.lng); }).map(function (p) {
     p.dist = Math.round(haversineM_(lat, lng, p.lat, p.lng));
     return p;
   }).filter(function (p) { return p.dist <= radius; }), q);
   const out = { ok: true, providers: names, provider: names[0], poi: poi };
-  if (errors.length) out.error = errors.join(', ');
-  else { try { cache.put(ck, JSON.stringify(out), POI_CACHE_SEC); } catch (e) {} } // 失敗はキャッシュしない
+  if (errors.length) out.error = errors.join(', ').slice(0, 400);
+  if (poi.length || !errors.length) { try { cache.put(ck, JSON.stringify(out), POI_CACHE_SEC); } catch (e) {} } // 何も引けなかった失敗は覚えない
+  return out;
+}
+
+// スクリプトエディタで実行して、近くの場所が引けるか確かめる(実行ログに結果が出る)。緯度経度は自宅あたり
+function testPoi() {
+  const r = nearbyPoi_({ lat: 34.7638, lng: 135.5135, radius: 300, nocache: true });
+  Logger.log('照会先: ' + r.providers.join(', ') + ' / 候補 ' + r.poi.length + ' 件' + (r.error ? ' / うまくいかなかった照会: ' + r.error : ''));
+  r.poi.slice(0, 10).forEach(function (p) { Logger.log(p.dist + 'm ' + p.name + ' (' + p.category + ', ' + p.id + ')'); });
+  return r;
   return out;
 }
 
@@ -593,10 +607,12 @@ function mergePoi_(list, q) {
 }
 
 // Overpass: 名前のある店・施設・観光・公園・史跡・駅。relation は重いので外す(元の縁泉の実測: 密集地で 504)
-function overpassProvider_(endpoint) {
+function overpassProvider_(endpoints) {
   return {
     name: 'osm',
-    request: function (lat, lng, radius, q) {
+    tries: endpoints.length,
+    label: function (k) { return 'osm(' + String(endpoints[k]).replace(/^https?:\/\//, '').split('/')[0] + ')'; },
+    request: function (lat, lng, radius, q, k) {
       const around = 'around:' + radius + ',' + lat + ',' + lng;
       let body;
       if (q) {
@@ -606,10 +622,11 @@ function overpassProvider_(endpoint) {
         body = ['amenity', 'shop', 'tourism', 'leisure', 'historic', 'craft', 'office'].map(function (k) { return 'nw(' + around + ')[name][' + k + '];'; }).join('') +
           'nw(' + around + ')[name][railway=station];nw(' + around + ')[name][building=temple];nw(' + around + ')[name][building=shrine];';
       }
-      return { url: endpoint, method: 'post', payload: { data: '[out:json][timeout:20];(' + body + ');out center 60;' }, muteHttpExceptions: true };
+      return { url: endpoints[k || 0], method: 'post', payload: { data: '[out:json][timeout:20];(' + body + ');out center 60;' }, muteHttpExceptions: true };
     },
     parse: function (text) {
-      const j = JSON.parse(text);
+      const j = JSON.parse(text); // HTML の断り文などはここで投げて次の照会先へ
+      if (!(j.elements || []).length && /error|timed out|rate_limited/i.test(String(j.remark || ''))) throw new Error('remark');
       return (j.elements || []).map(function (e) {
         const c = e.center || e, t = e.tags || {};
         const k = ['amenity', 'shop', 'tourism', 'leisure', 'historic', 'railway', 'craft', 'office', 'building'].filter(function (x) { return t[x]; })[0];
@@ -623,6 +640,8 @@ function overpassProvider_(endpoint) {
 function googleProvider_(key) {
   return {
     name: 'google',
+    tries: 1,
+    label: function () { return 'google'; },
     request: function (lat, lng, radius, q) {
       const circle = { circle: { center: { latitude: lat, longitude: lng }, radius: radius } };
       const payload = q
