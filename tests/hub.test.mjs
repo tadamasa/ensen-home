@@ -296,6 +296,11 @@ test('近くの場所の候補: 既定は OSM、Google はキーがあるとき�
   assert.deepEqual([...b.providers], ['osm', 'google']);
   assert.deepEqual(b.poi.map(p => p.id), ['osm:node/11', 'google:ChIJ_small', 'osm:way/22']);
   assert.equal(JSON.parse(log.at(-1).o.payload).locationRestriction.circle.radius, 500);
+  // アプリが端末から OSM を引くときは Google だけ
+  const n = log.length;
+  const g = hub.post({ token: hub.token, action: 'poi', lat: 35.2, lng: 139, osm: false });
+  assert.deepEqual([...g.providers], ['google']);
+  assert.equal(log.length, n + 1); assert.match(log.at(-1).url, /places\.googleapis/);
   // 止める
   hub.props.OVERPASS_ENDPOINT = 'off'; delete hub.props.GOOGLE_PLACES_API_KEY;
   assert.equal(hub.post({ token: hub.token, action: 'poi', lat: 35, lng: 139 }).provider, 'none');

@@ -526,7 +526,7 @@ function nearbyPoi_(req) {
   const key = props.getProperty('GOOGLE_PLACES_API_KEY');
   const ep = String(props.getProperty('OVERPASS_ENDPOINT') || '').trim();
   const providers = [];
-  if (ep !== 'off') providers.push(overpassProvider_(ep ? [ep] : OVERPASS_DEFAULTS));
+  if (ep !== 'off' && req.osm !== false) providers.push(overpassProvider_(ep ? [ep] : OVERPASS_DEFAULTS)); // アプリが端末から OSM を引くときは osm:false で来る(Google だけ)
   if (key) providers.push(googleProvider_(key));
   if (!providers.length) return { ok: true, providers: [], provider: 'none', poi: [] };
   const names = providers.map(function (x) { return x.name; });
