@@ -166,13 +166,13 @@ export function overpassQuery(lat, lng, radius, q = '') {
     const re = q.replace(/[\\"]/g, '').replace(/[.^$|?*+()[\]{}]/g, '.');
     body = `nw(${around})["name"~"${re}",i];`;
   } else {
-    body = `nw(${around})[name][~"^(${POI_KEYS.join('|')})$"~"."];nw(${around})[name][railway=station];`;
+    body = `nw(${around})[name][~"^(${POI_KEYS.join('|')})$"~"."];nw(${around})[name][railway=station];nw(${around})[name][building~"^(temple|shrine)$"];`;
   }
   return `[out:json][timeout:15];(${body});out center 60;`;
 }
 export function photonUrl(lat, lng, radius, q = '') {
   if (q) return `${PHOTON}/api/?q=${encodeURIComponent(q)}&lat=${lat}&lon=${lng}&limit=15&location_bias_scale=0.2`;
-  return `${PHOTON}/reverse?lat=${lat}&lon=${lng}&radius=${(radius / 1000).toFixed(2)}&limit=40&` + POI_KEYS.concat(['railway:station']).map(k => `osm_tag=${k}`).join('&');
+  return `${PHOTON}/reverse?lat=${lat}&lon=${lng}&radius=${(radius / 1000).toFixed(2)}&limit=40&` + POI_KEYS.concat(['railway:station', 'building:temple', 'building:shrine']).map(k => `osm_tag=${k}`).join('&');
 }
 export function parsePhoton(j, lat, lng, radius) {
   const T = { N: 'node', W: 'way', R: 'relation' };
@@ -181,7 +181,7 @@ export function parsePhoton(j, lat, lng, radius) {
     const p = { id: `osm:${T[pr.osm_type] || 'node'}/${pr.osm_id}`, src: 'osm', name: pr.name, lat: Number(c[1]), lng: Number(c[0]), category: pr.osm_key ? `${pr.osm_key}=${pr.osm_value}` : '' };
     p.dist = Math.round(haversine(lat, lng, p.lat, p.lng));
     return p;
-  }).filter(p => p.name && isFinite(p.lat) && p.dist <= radius && (POI_KEYS.includes(p.category.split('=')[0]) || p.category === 'railway=station' || p.category.startsWith('building=')))
+  }).filter(p => p.name && isFinite(p.lat) && p.dist <= radius && (POI_KEYS.includes(p.category.split('=')[0]) || p.category === 'railway=station' || p.category === 'building=temple' || p.category === 'building=shrine'))
     .sort((a, b) => a.dist - b.dist);
 }
 // 候補を一つに: 同じIDは一つ、Google の候補は同じ店(60m以内・同じ名前)が OSM にあれば落とす

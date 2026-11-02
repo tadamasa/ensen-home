@@ -228,7 +228,8 @@ test('近くの場所: 種類を一語に、台帳と重なる候補は除く', 
 test('端末から直接 OSM を引くときの問い合わせと読み方', async () => {
   const { overpassQuery, parseOverpass } = await import('../js/ensen.js');
   assert.match(overpassQuery(35, 139, 300), /nw\(around:300,35,139\)\[name\]\[~"\^\(amenity\|shop/);
-  assert.equal((overpassQuery(35, 139, 300).match(/around/g) || []).length, 2); // around は2つまで(重くしない)
+  assert.equal((overpassQuery(35, 139, 300).match(/around/g) || []).length, 3); // around は3つまで(重くしない)
+  assert.match(overpassQuery(35, 139, 300), /\[building~"\^\(temple\|shrine\)\$"\]/); // 建物だけで描かれた寺社も
   assert.match(overpassQuery(35, 139, 5000, '勝盛(江坂)'), /\["name"~"勝盛.江坂.",i\]/);
   const got = parseOverpass({ elements: [
     { type: 'way', id: 2, center: { lat: 35.002, lon: 139 }, tags: { name: 'Park', 'name:ja': '公園', leisure: 'park' } },
@@ -242,6 +243,7 @@ test('端末から直接 OSM を引くときの問い合わせと読み方', asy
 test('Photon(OSM の検索)の問い合わせと読み方、候補の重ね方', async () => {
   const { photonUrl, parsePhoton, mergePoiList } = await import('../js/ensen.js');
   assert.match(photonUrl(35, 139, 300), /\/reverse\?lat=35&lon=139&radius=0\.30&limit=40&osm_tag=amenity&osm_tag=shop/);
+  assert.match(photonUrl(35, 139, 300), /osm_tag=building:temple&osm_tag=building:shrine$/);
   assert.match(photonUrl(35, 139, 5000, '勝盛'), /\/api\/\?q=%E5%8B%9D%E7%9B%9B&lat=35&lon=139/);
   const got = parsePhoton({ features: [
     { geometry: { coordinates: [139, 35.002] }, properties: { osm_type: 'W', osm_id: 2, osm_key: 'leisure', osm_value: 'park', name: '公園' } },

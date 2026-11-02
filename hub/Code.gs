@@ -620,7 +620,7 @@ function overpassProvider_(endpoints) {
         body = 'nw(' + around + ')["name"~"' + re + '",i];';
       } else {
         // 一つの around にまとめる(キーごとに around を重ねると重く、混む時間に時間切れになる)
-        body = 'nw(' + around + ')[name][~"^(amenity|shop|tourism|leisure|historic|craft|office)$"~"."];nw(' + around + ')[name][railway=station];';
+        body = 'nw(' + around + ')[name][~"^(amenity|shop|tourism|leisure|historic|craft|office)$"~"."];nw(' + around + ')[name][railway=station];nw(' + around + ')[name][building~"^(temple|shrine)$"];';
       }
       return { url: endpoints[k || 0], method: 'post', payload: { data: '[out:json][timeout:15];(' + body + ');out center 60;' }, muteHttpExceptions: true };
     },
