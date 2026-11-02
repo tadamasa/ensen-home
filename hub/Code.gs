@@ -148,7 +148,11 @@ function reconcile_(ss, rev) {
       const id = String(r[0] || '').trim();
       if (!id || byId[id] !== undefined) return; // 同じidの2行目以降は無視(追記専用なので直さない)
       byId[id] = i;
-      bumpIfChanged_(st, kind, id, hashRow_(kind, r));
+      const h = hashRow_(kind, r);
+      // 返す形を変えただけ(中身は前のまま)の送り直しでは mtime を進めない。手元の未送信の操作が「古い」と退けられないように
+      const li = lidx[kind + '|' + id];
+      const keep = li !== undefined && DATA_SHAPE[kind] && ledger[li][4] !== 'true' && ledger[li][5] !== h && ledger[li][5] === hashRow_(kind, r, true);
+      bumpIfChanged_(st, kind, id, h, keep ? ledger[li][3] : undefined);
     });
     st.rows[kind] = rows;
     st.byId[kind] = byId;
@@ -405,8 +409,8 @@ function fillThumbs_(st, items) {
 const DATA_SHAPE = { intents: '2', spot_fixes: '2' };
 
 // FNV-1a(32bit)。「変わったか」を見るだけなので軽いもので足りる
-function hashRow_(kind, r) {
-  const parts = DATA_SHAPE[kind] ? ['shape' + DATA_SHAPE[kind]] : [];
+function hashRow_(kind, r, noShape) {
+  const parts = DATA_SHAPE[kind] && !noShape ? ['shape' + DATA_SHAPE[kind]] : [];
   for (let i = 0; i < KINDS[kind].cols; i++) parts.push(r[i] instanceof Date ? isoString_(r[i]) : String(r[i] == null ? '' : r[i]));
   const str = parts.join('\u0001');
   let h = 0x811c9dc5;

@@ -365,3 +365,19 @@ test('spot_fixes の ts は書き込みの入口で yyyy-MM-ddTHH:mm:ss+09:00 �
   const got = hub.post({ token: hub.token, since: 0 }).items.filter(i => i.kind === 'spot_fixes').map(i => i.data);
   assert.deepEqual(got.map(d => d.seq).sort(), [2, 3, 4, 5, 6]);
 });
+
+test('返す形を変えた送り直しでは mtime を進めず、手元の未送信の操作を退けない', () => {
+  const before = loadHub({ code: OLD_HUB || undefined });
+  const iid = before.gas.intent({ what: '方丈記を読む' });
+  const r0 = before.post({ token: before.token, since: 0 });
+  const old = r0.items.find(i => i.id === iid).mtime;
+  // 同じシートを新しいハブで開く(形の印が変わる)
+  const after = loadHub();
+  after.ensen.sheets.clear();
+  for (const [n, sh] of before.ensen.sheets) after.ensen.sheets.set(n, sh);
+  after.props.REV = before.props.REV;
+  after.props.TOKEN = before.token;
+  const r1 = after.post({ token: before.token, since: r0.rev, push: { intents: [{ id: iid, mtime: old + 1, data: { status: 'released' } }] } });
+  assert.equal(after.rows('intents')[1][6], 'released');
+  assert.equal(r1.items.find(i => i.id === iid).data.status, 'released');
+});
