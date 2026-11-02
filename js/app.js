@@ -1237,7 +1237,7 @@ async function renderSettings(arg) {
       <div class="card">
         <div class="row"><label for="s-pkey">APIキー</label><input id="s-pkey" type="password" value="${esc(placesKey)}" autocomplete="off" placeholder="AIza…"></div>
       </div>
-      <p class="hint">入れると、結ぶで「場所」を選んだとき、OpenStreetMap の候補に Google の候補を足します(この端末から直接)。キーはこの端末の中だけに置き、バックアップにも入れません。Google Cloud でキーを「HTTP リファラー: https://tadamasa.github.io/*」「API: Places API (New)」に絞ってください。近くの検索は月5,000回まで無料です。</p>
+      <p class="hint">入れると、結ぶで「場所」を選んだとき、OpenStreetMap の候補に Google の候補を足します(この端末から直接)。キーはこの端末の中だけに置き、バックアップにも入れません。Google Cloud でキーを「API: Places API (New)」に絞り、できれば「HTTP リファラー: https://tadamasa.github.io/*」も付けてください(ブラウザが送るリファラーで確かめられます。「試す」で断られたら、リファラーの制限だけ外してください)。近くの検索は月5,000回まで無料です。</p>
       <div class="actions"><button class="btn btn--tinted" id="s-save-places">保存</button><button class="btn btn--plain" id="s-test-places">試す</button></div>
       <p class="hint" id="s-places-result" aria-live="polite"></p>
     </div></details>
