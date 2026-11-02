@@ -91,13 +91,17 @@ export function loadHub(opts = {}) {
     CacheService: { getScriptCache: () => ({ get: k => cache[k] ?? null, put: (k, v) => { cache[k] = v; } }) },
     ContentService: { createTextOutput: s => ({ text: s, setMimeType() { return this; } }), MimeType: { JSON: 'json' } },
     DriveApp: { getFolderById: () => folder, getFoldersByName: () => ({ hasNext: () => true, next: () => folder }), createFolder: () => folder },
-    UrlFetchApp: { fetch: opts.fetch || (() => ({ getResponseCode: () => 200, getContentText: () => JSON.stringify({ places: [{ displayName: { text: '近くの喫茶' }, location: { latitude: 35, longitude: 139 } }] }) })) },
+    UrlFetchApp: (() => {
+      const fetch = opts.fetch || (() => ({ getResponseCode: () => 200, getContentText: () => JSON.stringify({ places: [{ displayName: { text: '近くの喫茶' }, location: { latitude: 35, longitude: 139 } }] }) }));
+      return { fetch, fetchAll: reqs => reqs.map(r => fetch(r.url, r)) };
+    })(),
     Maps: { newGeocoder: () => { const g = { setLanguage: () => g, setRegion: () => g, setBounds: () => g, geocode: q => (opts.geocode ? opts.geocode(q) : { status: 'ZERO_RESULTS', results: [] }) }; return g; } },
     ScriptApp: { triggers: [], getProjectTriggers() { return this.triggers; }, deleteTrigger(t) { this.triggers = this.triggers.filter(x => x !== t); }, newTrigger(fn) { const self = this; const b = { timeBased: () => b, after: () => b, create: () => { const t = { getHandlerFunction: () => fn }; self.triggers.push(t); return t; } }; return b; } },
     Utilities: {
       getUuid: () => `0000${(++uuid).toString(16).padStart(4, '0')}-1111-2222-3333-444455556666`,
       formatDate,
       base64Decode: s => Buffer.from(s, 'base64'),
+      base64EncodeWebSafe: s => Buffer.from(String(s)).toString('base64url'),
       newBlob: (bytes, type, name) => ({ bytes, type, name }),
       sleep() {},
     },

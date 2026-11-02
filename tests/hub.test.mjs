@@ -91,6 +91,27 @@ test('場所は150mより遠ければ同名でも別の場所', () => {
   assert.notEqual(rows[1][8], rows[2][8]);
 });
 
+test('地図の候補から選んだ場所は、IDを enrich と台帳の鍵に残し、名前が揺れても同じ場所として再会する', () => {
+  const hub = loadHub();
+  const aid = hub.gas.actant({ type: '場所', name: 'スターバックス', keys: '{"lat":35.0,"lng":139.0}' });
+  hub.post({ token: hub.token, since: 0, push: { events: [
+    ev('q1', 1, { type: '場所', name: 'スターバックス', lat: 35.0003, lng: 139.0, poi_id: 'osm:node/42' }),
+    ev('q2', 2, { type: '場所', name: 'Starbucks Coffee 駅前店', lat: 35.0003, lng: 139.0, poi_id: 'osm:node/42' }),
+    ev('q3', 3, { type: '場所', name: '新しい喫茶', lat: 35.1, lng: 139.1, poi_id: 'google:ChIJ_x' }),
+    ev('q4', 4, { type: '場所', name: '変なID', lat: 35.2, lng: 139.2, poi_id: 'javascript:alert(1)' }),
+  ] } });
+  const rows = hub.rows('events');
+  assert.equal(rows[1][8], aid); assert.equal(rows[2][8], aid); // 表記違いでも同じ台帳
+  assert.equal(rows[2][9], '再会');
+  assert.deepEqual(JSON.parse(rows[1][15]), { poi: 'osm:node/42' });
+  assert.equal(rows[4][15], ''); // 形の違うIDは捨てる
+  const acts = Object.fromEntries(hub.rows('actants').slice(1).map(r => [r[2], JSON.parse(r[4])]));
+  assert.deepEqual(acts['スターバックス'], { lat: 35.0, lng: 139.0, poi: 'osm:node/42' }); // 位置は台帳のまま、IDだけ覚える
+  assert.deepEqual(acts['新しい喫茶'], { lat: 35.1, lng: 139.1, poi: 'google:ChIJ_x' });
+  const got = byKind(hub.post({ token: hub.token, since: 0 }), 'actants').find(a => a.id === aid);
+  assert.equal(got.data.poi, 'osm:node/42');
+});
+
 test('語彙の外は断り、理由を返す', () => {
   const hub = loadHub();
   const res = hub.post({ token: hub.token, since: 0, push: { events: [ev('bad', 1, { type: '動物' }), ev('bad2', 1, { verb: '別れる' })], appraisals: [{ id: 'a', mtime: 1, data: { target: 'x', weight: 5 } }] } });
@@ -241,12 +262,55 @@ test('試す: ブクログ取込の印(src)をアプリへ渡す', () => {
   assert.equal(got.mine.src, '');
 });
 
-test('近くの場所の候補はキーがあるときだけ', () => {
-  const hub = loadHub();
-  assert.equal(hub.post({ token: hub.token, action: 'poi', lat: 35, lng: 139 }).provider, 'none');
+// 照会先のふり: Overpass と Google Places(New) の返事を URL で分ける
+function poiFetch(log) {
+  return (url, o) => {
+    log.push({ url, o });
+    if (/overpass/.test(url)) return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ elements: [
+      { type: 'node', id: 11, lat: 35.0005, lon: 139.0, tags: { name: '喫茶ほとり', amenity: 'cafe' } },
+      { type: 'way', id: 22, center: { lat: 35.002, lon: 139.0 }, tags: { name: 'Mizube Park', 'name:ja': 'みずべ公園', leisure: 'park' } },
+      { type: 'node', id: 33, lat: 35.02, lon: 139.0, tags: { name: '遠すぎる店', shop: 'bakery' } },
+    ] }) };
+    return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ places: [
+      { id: 'ChIJ_hotori', displayName: { text: '喫茶 ほとり' }, location: { latitude: 35.0006, longitude: 139.0001 }, primaryType: 'cafe' },
+      { id: 'ChIJ_small', displayName: { text: '小さな古書店' }, location: { latitude: 35.001, longitude: 139.0 }, primaryType: 'book_store' },
+    ] }) };
+  };
+}
+
+test('近くの場所の候補: 既定は OSM、Google はキーがあるときだけ足し、同じ店は OSM を残す', () => {
+  const log = [];
+  const hub = loadHub({ fetch: poiFetch(log) });
+  const a = hub.post({ token: hub.token, action: 'poi', lat: 35, lng: 139 });
+  assert.deepEqual([...a.providers], ['osm']);
+  assert.deepEqual(a.poi.map(p => p.name), ['喫茶ほとり', 'みずべ公園']); // 近い順・300m の外は落とす・name:ja を使う
+  assert.equal(a.poi[0].id, 'osm:node/11');
+  assert.equal(a.poi[0].category, 'amenity=cafe');
+  assert.equal(a.poi[1].dist, 222);
+  assert.match(log[0].url, /maps\.mail\.ru/);
+  assert.match(log[0].o.payload.data, /around:300,35,139/);
+  // 二度目はキャッシュ
+  assert.equal(hub.post({ token: hub.token, action: 'poi', lat: 35, lng: 139 }).cached, true);
   hub.props.GOOGLE_PLACES_API_KEY = 'k';
-  const r = hub.post({ token: hub.token, action: 'poi', lat: 35, lng: 139 });
-  assert.equal(r.poi[0].name, '近くの喫茶');
+  const b = hub.post({ token: hub.token, action: 'poi', lat: 35, lng: 139, radius: 500 });
+  assert.deepEqual([...b.providers], ['osm', 'google']);
+  assert.deepEqual(b.poi.map(p => p.id), ['osm:node/11', 'google:ChIJ_small', 'osm:way/22']);
+  assert.equal(JSON.parse(log.at(-1).o.payload).locationRestriction.circle.radius, 500);
+  // 止める
+  hub.props.OVERPASS_ENDPOINT = 'off'; delete hub.props.GOOGLE_PLACES_API_KEY;
+  assert.equal(hub.post({ token: hub.token, action: 'poi', lat: 35, lng: 139 }).provider, 'none');
+});
+
+test('近くの場所の候補: 名前で探す(5km 以内、名前の近い順)。失敗は静かに空で返す', () => {
+  const log = [];
+  const hub = loadHub({ fetch: poiFetch(log) });
+  const r = hub.post({ token: hub.token, action: 'poi', lat: 35, lng: 139, q: '遠すぎ(る)店' });
+  assert.match(log[0].o.payload.data, /around:5000,35,139\)\["name"~"遠すぎ\.る\.店",i\]/);
+  assert.equal(r.poi[0].name, '遠すぎる店');
+  const bad = loadHub({ fetch: () => ({ getResponseCode: () => 504, getContentText: () => 'timeout' }) });
+  const e = bad.post({ token: bad.token, action: 'poi', lat: 35, lng: 139 });
+  assert.equal(e.ok, true); assert.equal(e.poi.length, 0); assert.match(e.error, /osm 504/);
+  assert.notEqual(bad.post({ token: bad.token, action: 'poi', lat: 35, lng: 139 }).cached, true); // 失敗は覚えない
 });
 
 test('場所名の修正を place_names に追記する(シートがなければ作る)', () => {

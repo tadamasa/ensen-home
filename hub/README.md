@@ -66,12 +66,21 @@ Code.gs を貼り替えて保存したら、「デプロイ」→「デプロイ
 |---|---|
 | `ENSEN_SHEET_ID` | 縁泉 `ensen`(1vKPwd3k…) |
 | `ENSEN_MEDIA_FOLDER_ID` | (なし)= Drive の `ensen_media` フォルダを名前で探す |
-| `GOOGLE_PLACES_API_KEY` | (なし)= 近くの場所の候補は、台帳の150〜300m以内だけ。縁泉GASと同じキーを入れると Google の候補も出ます |
+| `OVERPASS_ENDPOINT` | `https://maps.mail.ru/osm/tools/overpass/api/interpreter` = 結ぶ画面の「近くの場所」を OpenStreetMap から引く。`off` で止める(本家 overpass-api.de は GAS からの照会を断るので使えません) |
+| `GOOGLE_PLACES_API_KEY` | (なし)= 近くの場所は OSM だけ。入れると Google Places(New) の候補を足します(小さな店に強い。Nearby Search は Pro 枠で月5,000回まで無料、同じ場所は30分覚えるので個人なら超えません) |
 | `DIARY_SHEET_ID` / `DIARY_APP_URL` | 「日記の記録」と日記アプリ |
 | `BOOKS_SHEET_ID` / `READING_APP_URL` | 読書ハブと読書メモアプリ |
 | `MOVIES_SHEET_ID` / `MOVIE_APP_URL` | 映画ハブと映画メモアプリ |
 
 日記・読書ハブ・映画ハブは、泉の画面の「この日の日記」「この日に読み終えた本・観た映画」のために読むだけで、書き込みません。
+
+## 近くの場所(結ぶ画面、action=poi)
+
+結ぶで「場所」を選ぶと、アプリはまず自分の台帳(300m以内)を出し、ハブに近くの場所を尋ねます。ハブは OSM(Overpass)と、キーがあれば Google Places を同時に引き、近い順に返します(約100m四方・30分は覚えておく。失敗は静かに空で返し、覚えない)。
+
+- **名前で探す**: 店を出てから結ぶとき用。名前を打つと「近くで探す」が出て、5km 以内を名前で引きます。
+- **選んだ場所のID**: 候補を選んで結ぶと、`events.enrich` に `{"poi":"osm:node/123"}`(Google なら `google:<place_id>`)、台帳 `actants.keys` に `poi` を残します。次に同じIDの場所を選べば、名前の表記が違っても同じ台帳に再会します。既にある台帳には ID だけ足し、位置は変えません。
+- **OSM と Google が同じ店**(60m以内・名前がほぼ同じ)のときは OSM を残します。OSM の座標は ODbL で保存してよく(表記「© OpenStreetMap contributors」をアプリに出しています)、Google の規約では座標の保存は30日まで・place_id は無期限で、Google 以外の地図への表示もできないためです。アプリの「地図で選ぶ」には OSM と台帳だけを置き、Google の候補は一覧にだけ出します。Google の候補を選んだ縁は座標も events に残るので、気になるなら Google のキーは入れずに使ってください。
 
 ## スポットの位置を店の名前で直す(SpotMatch.gs)
 

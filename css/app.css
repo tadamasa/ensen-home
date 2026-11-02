@@ -357,3 +357,26 @@ svg.ic { width: 24px; height: 24px; stroke: currentColor; fill: none; stroke-wid
 @media (prefers-reduced-motion: reduce) { .tm--doubt.tm, .pick-pin { animation: none; } }
 .cand-no { width: 20px; height: 20px; border-radius: 50%; border: 1.5px solid var(--accent); color: var(--accent); font-size: 11px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; flex: none; }
 .chip.is-active .cand-no { border-color: #fff; color: #fff; }
+
+/* 結ぶ: 近くの場所を選ぶ(OSM・Google の候補と小さな地図) */
+.find:empty { display: none; }
+.find { margin: var(--space-1) 0; }
+.picked { width: 100%; display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); border-radius: 12px; background: color-mix(in srgb, var(--color-accent) 10%, transparent); font-size: 14px; animation: picked-in .32s cubic-bezier(.2, .8, .2, 1); }
+.picked > span { flex: 1; min-width: 0; }
+.picked > :first-child { flex: none; width: 18px; height: 18px; color: var(--color-accent); }
+.picked svg { width: 18px; height: 18px; }
+@keyframes picked-in { from { opacity: 0; transform: translateY(-4px) scale(.98); } }
+.poi-wait { margin-left: var(--space-2); color: var(--color-label-tertiary); animation: poi-breathe 1.6s ease-in-out infinite; }
+@keyframes poi-breathe { 50% { opacity: .35; } }
+.poi-tools { width: 100%; display: flex; gap: var(--space-2); margin-top: var(--space-1); }
+.chip--ghost { background: transparent; border: 1px dashed var(--color-label-tertiary); color: var(--color-accent); }
+.pick-wrap { width: 100%; margin-top: var(--space-2); }
+#f-pickmap { height: min(44vh, 320px); border-radius: 12px; overflow: hidden; background: var(--sunk); }
+.pk { position: relative; display: flex; align-items: center; gap: 4px; white-space: nowrap; width: max-content; }
+.pk i { flex: none; width: 14px; height: 14px; border-radius: 50%; background: #fff; border: 3px solid #6b7a76; box-shadow: 0 1px 3px rgba(0, 0, 0, .3); transition: transform .2s; }
+.pk span { flex: none; font-size: 11px; line-height: 1.2; padding: 1px 5px; border-radius: 6px; background: rgba(255, 255, 255, .86); color: #333; max-width: 9em; overflow: hidden; text-overflow: ellipsis; opacity: .85; }
+.pk--mine i { border-color: var(--color-accent); }
+.pk--drop i { border-color: #2a7de1; }
+.pk.is-on i { background: var(--color-accent); border-color: #fff; transform: scale(1.35); }
+.pk.is-on span { background: var(--color-accent); color: #fff; font-weight: 600; opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .picked, .poi-wait { animation: none; } }

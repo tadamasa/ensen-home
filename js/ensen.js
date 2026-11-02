@@ -136,6 +136,31 @@ export function nearbyPlaces(actants, lat, lng, radius = NEAR_RADIUS_M) {
     .map(a => ({ a, d: haversine(lat, lng, a.lat, a.lng) }))
     .filter(x => x.d <= radius).sort((x, y) => x.d - y.d).map(x => ({ ...x.a, dist: Math.round(x.d) }));
 }
+// 外の地図(OSM/Google)の候補の種類を一語に。ここを足せば表示が変わる
+const POI_KIND = {
+  cafe: 'カフェ', coffee_shop: 'カフェ', restaurant: '飲食店', fast_food: '軽食', food_court: '飲食店', bar: 'バー', pub: '酒場', izakaya: '居酒屋', ice_cream: '甘味', confectionery: '菓子', bakery: 'パン',
+  convenience: 'コンビニ', convenience_store: 'コンビニ', supermarket: 'スーパー', department_store: '百貨店', mall: '商業施設', shopping_mall: '商業施設', books: '本屋', book_store: '本屋', clothes: '服', clothing_store: '服',
+  library: '図書館', school: '学校', university: '大学', kindergarten: '園', hospital: '病院', clinic: '医院', doctors: '医院', dentist: '歯科', pharmacy: '薬局', bank: '銀行', post_office: '郵便局', townhall: '役所', city_hall: '役所', community_centre: '集会所',
+  place_of_worship: '寺社', temple: '寺', shrine: '神社', buddhist_temple: '寺', hindu_temple: '寺院', church: '教会', theatre: '劇場', cinema: '映画館', movie_theater: '映画館', arts_centre: '芸術', museum: '博物館', gallery: 'ギャラリー', art_gallery: 'ギャラリー',
+  hotel: '宿', hostel: '宿', guest_house: '宿', ryokan: '旅館', attraction: '名所', tourist_attraction: '名所', viewpoint: '眺め', information: '案内', zoo: '動物園', aquarium: '水族館', theme_park: '遊園地',
+  park: '公園', garden: '庭園', playground: '遊び場', sports_centre: '運動', fitness_centre: 'ジム', gym: 'ジム', stadium: '競技場', swimming_pool: 'プール', pitch: '運動場', public_bath: '銭湯', onsen: '温泉',
+  station: '駅', train_station: '駅', subway_station: '駅', bus_station: 'バス', parking: '駐車場', fuel: 'GS', gas_station: 'GS',
+  castle: '城', monument: '碑', memorial: '碑', ruins: '遺跡', archaeological_site: '遺跡',
+};
+export function poiLabel(category) {
+  const v = String(category || '').split('=')[1] || '';
+  if (POI_KIND[v]) return POI_KIND[v];
+  if (/_restaurant$/.test(v)) return '飲食店';
+  if (/_store$|_shop$/.test(v)) return '店';
+  return '';
+}
+// 外の候補から、台帳の候補と重なるもの(同じID・同じ名前)を除く
+export function poiChoices(near, poi, max = 8) {
+  const ids = new Set(near.map(a => a.poi).filter(Boolean));
+  const names = new Set(near.map(a => norm(a.name)));
+  return (poi || []).filter(x => !ids.has(x.id) && !names.has(norm(x.name))).slice(0, max);
+}
+
 // 名前の候補: その種別の最近と、何度も結んだもの(重ならないように)
 export function nameChips(actants, type, max = 5) {
   const mine = actants.filter(a => a.type === type);
