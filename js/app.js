@@ -6,7 +6,7 @@ import { exportData, importData } from './backup.js';
 import {
   TYPES, VERBS, ORIGINS, TYPE_KEY, TYPE_ICON, VERB_ICON, VERB_ORDER, VERB_TIPS,
   esc, uuid, haversine, isoLocal, today, isDate, dayOf, timeOf, toInputValue, fromInputValue, shiftMonth, monthCells, dateLabel, gapLabel, autoSeason,
-  findActant, suggestVerb, nearbyPlaces, nameChips, poiLabel, poiChoices, OVERPASS_DIRECT, overpassQuery, parseOverpass, isHomeMove, homeKind, echoOf,
+  findActant, suggestVerb, nearbyPlaces, nameChips, poiLabel, poiChoices, OVERPASS_DIRECT, overpassQuery, parseOverpass, photonUrl, parsePhoton, mergePoiList, isHomeMove, homeKind, echoOf,
   frontier, reunions, apprQueue, placeNameFor, isBooklogIntent, booklogCsv, READING_MEMO_URL, latestSpotFixes, applySpotFixes, spotSuspects, spotCandidates, yearReview, yearStory, yearsOf, SEASONS, meshBounds, latestWeight, mapPoints, distantCandidates, distantPrompt, parseDistant, parseExif,
 } from './ensen.js';
 
@@ -374,45 +374,47 @@ async function loadPoi(q = '') {
   if (form[slot + 'Key'] === key) return;
   Object.assign(form, { [slot + 'Key']: key, [slot]: null, [slot + 'Busy']: true });
   if (q) paintRecordParts();
-  // OSM は端末から直接引く(速い)。ハブには Google の分だけを同時に尋ねる(キーが無ければすぐ空で返る)
+  // OSM は端末から直接引く。Photon と Overpass 2か所を同時に投げ、届いた順に重ねる。
+  // ハブには Google の分だけを同時に尋ねる(キーが無ければすぐ空で返る)。同じ場所の OSM の結果は端末に1週間覚えておく
   const rad = q ? 5000 : form.poiRadius;
   const stale = () => form[slot + 'Key'] !== key;
-  let list = [], providers = [], notes = [], left = 2;
-  const show = () => {
+  const memo = `ensen-poi:${key}`;
+  let cached = null;
+  try { const m = JSON.parse(localStorage.getItem(memo) || 'null'); if (m && Date.now() - m.at < 7 * 864e5) cached = m.list; } catch { /* 覚えていなくてもよい */ }
+  let list = cached || [], notes = [];
+  const jobs = [];
+  const show = done => {
     if (stale()) return;
     form[slot] = list;
-    form[slot + 'Busy'] = left > 0 && !list.length;
-    form.poiNote = !list.length && left === 0 ? notes.join('・') : '';
-    if (providers.length) form.poiProviders = providers;
+    form[slot + 'Busy'] = !done && !list.length;
+    form.poiNote = !list.length && done ? notes.join('・') : '';
+    form.poiProviders = ['osm', 'google'].filter(x => list.some(y => y.src === x));
     if (location.hash.startsWith('#record') && form.type === '場所') { paintRecordParts(); drawPick(); }
   };
-  const add = (got, src) => {
-    const seen = new Set(list.map(x => x.id));
-    const osm = list.concat(got).filter(x => x.src === 'osm');
-    got = got.filter(x => !seen.has(x.id) && (x.src === 'osm' || !osm.some(o => haversine(o.lat, o.lng, x.lat, x.lng) <= 60 && o.name.replace(/\s/g, '') === x.name.replace(/\s/g, ''))));
-    list = list.concat(got).sort((a, b) => a.dist - b.dist);
-    if (src && !providers.includes(src)) providers.push(src);
+  const add = got => { list = mergePoiList(list.concat(got)); show(false); };
+  const timed = (url, opts, ms = 20000) => {
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), ms);
+    return fetch(url, { ...opts, signal: ac.signal }).then(res => { if (!res.ok) throw new Error(String(res.status)); return res.json(); }).finally(() => clearTimeout(t));
   };
-  const direct = (async () => {
+  const why = (host, e) => notes.push(`${host} ${e.name === 'AbortError' ? '時間切れ' : e.message}`);
+  if (!cached) {
+    const osmGot = [];
+    jobs.push(timed(photonUrl(p.lat, p.lng, rad, q)).then(j => { const g = parsePhoton(j, p.lat, p.lng, rad); osmGot.push(...g); add(g); }).catch(e => why('photon', e)));
     for (const ep of OVERPASS_DIRECT) {
-      const ac = new AbortController();
-      const t = setTimeout(() => ac.abort(), 12000);
-      try {
-        const res = await fetch(ep, { method: 'POST', signal: ac.signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'data=' + encodeURIComponent(overpassQuery(p.lat, p.lng, rad, q)) });
-        if (!res.ok) { notes.push(`${new URL(ep).host} ${res.status}`); continue; }
-        add(parseOverpass(await res.json(), p.lat, p.lng, rad), 'osm');
-        if (!providers.includes('osm')) providers.unshift('osm');
-        return true;
-      } catch (e) { notes.push(`${new URL(ep).host} ${e.name === 'AbortError' ? '時間切れ' : e.message}`); }
-      finally { clearTimeout(t); }
+      jobs.push(timed(ep, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'data=' + encodeURIComponent(overpassQuery(p.lat, p.lng, rad, q)) })
+        .then(j => { const g = parseOverpass(j, p.lat, p.lng, rad); osmGot.push(...g); add(g); }).catch(e => why(new URL(ep).host, e)));
     }
-    return false;
-  })().then(ok => { left--; show(); return ok; });
-  const hub = sync.ask('poi', { lat: p.lat, lng: p.lng, radius: form.poiRadius, q, osm: false })
-    .then(r => { add((r && r.poi) || [], null); (r && r.providers || []).forEach(x => { if (!providers.includes(x) && list.some(y => y.src === x)) providers.push(x); }); if (r && r.error) notes.push(r.error); })
-    .catch(e => { notes.push(`縁泉ハブ: ${e.message}`); })
-    .finally(() => { left--; show(); });
-  await Promise.all([direct, hub]);
+    Promise.allSettled(jobs.slice()).then(() => {
+      if (osmGot.length) { try { localStorage.setItem(memo, JSON.stringify({ at: Date.now(), list: mergePoiList(osmGot) })); } catch { /* 満杯なら覚えない */ } }
+    });
+  }
+  jobs.push(sync.ask('poi', { lat: p.lat, lng: p.lng, radius: form.poiRadius, q, osm: false })
+    .then(r => { add(((r && r.poi) || []).filter(x => x.src !== 'osm' || !cached)); if (r && r.error) notes.push(r.error); })
+    .catch(e => { notes.push(`縁泉ハブ: ${e.message}`); }));
+  show(false);
+  await Promise.allSettled(jobs);
+  show(true);
 }
 // 候補を採る: 名前と位置をその場所に。外の地図の候補ならIDも持って行く(台帳が同じ場所だと覚える)
 function choosePlace(c) {

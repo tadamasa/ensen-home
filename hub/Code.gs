@@ -617,12 +617,12 @@ function overpassProvider_(endpoints) {
       let body;
       if (q) {
         const re = q.replace(/[\\"]/g, '').replace(/[.^$|?*+()\[\]{}]/g, '.'); // 正規表現の記号は「何か1文字」に
-        body = 'nw(' + around + ')["name"~"' + re + '",i];nw(' + around + ')["name:ja"~"' + re + '",i];';
+        body = 'nw(' + around + ')["name"~"' + re + '",i];';
       } else {
-        body = ['amenity', 'shop', 'tourism', 'leisure', 'historic', 'craft', 'office'].map(function (k) { return 'nw(' + around + ')[name][' + k + '];'; }).join('') +
-          'nw(' + around + ')[name][railway=station];nw(' + around + ')[name][building=temple];nw(' + around + ')[name][building=shrine];';
+        // 一つの around にまとめる(キーごとに around を重ねると重く、混む時間に時間切れになる)
+        body = 'nw(' + around + ')[name][~"^(amenity|shop|tourism|leisure|historic|craft|office)$"~"."];nw(' + around + ')[name][railway=station];nw(' + around + ')[name][building~"^(temple|shrine)$"];';
       }
-      return { url: endpoints[k || 0], method: 'post', payload: { data: '[out:json][timeout:20];(' + body + ');out center 60;' }, muteHttpExceptions: true };
+      return { url: endpoints[k || 0], method: 'post', payload: { data: '[out:json][timeout:15];(' + body + ');out center 60;' }, muteHttpExceptions: true };
     },
     parse: function (text) {
       const j = JSON.parse(text); // HTML の断り文などはここで投げて次の照会先へ

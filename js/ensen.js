@@ -154,19 +154,47 @@ export function poiLabel(category) {
   if (/_store$|_shop$/.test(v)) return '店';
   return '';
 }
-// 端末から直接 OSM(Overpass)を引くとき用(ハブ側の照会先が全部断ったときの控え)。ハブの overpassProvider_ と同じ問い合わせ
+// 端末から直接 OSM を引くとき用。Photon(komoot、OSM の検索。速い)と Overpass を同時に投げ、先に届いた方から出す
 export const OVERPASS_DIRECT = ['https://overpass-api.de/api/interpreter', 'https://overpass.private.coffee/api/interpreter'];
+export const PHOTON = 'https://photon.komoot.io';
+const POI_KEYS = ['amenity', 'shop', 'tourism', 'leisure', 'historic', 'craft', 'office'];
+// 一つの around にまとめる(キーごとに around を重ねると重く、混んでいる時間に時間切れになる)
 export function overpassQuery(lat, lng, radius, q = '') {
   const around = `around:${radius},${lat},${lng}`;
   let body;
   if (q) {
     const re = q.replace(/[\\"]/g, '').replace(/[.^$|?*+()[\]{}]/g, '.');
-    body = `nw(${around})["name"~"${re}",i];nw(${around})["name:ja"~"${re}",i];`;
+    body = `nw(${around})["name"~"${re}",i];`;
   } else {
-    body = ['amenity', 'shop', 'tourism', 'leisure', 'historic', 'craft', 'office'].map(k => `nw(${around})[name][${k}];`).join('')
-      + `nw(${around})[name][railway=station];nw(${around})[name][building=temple];nw(${around})[name][building=shrine];`;
+    body = `nw(${around})[name][~"^(${POI_KEYS.join('|')})$"~"."];nw(${around})[name][railway=station];nw(${around})[name][building~"^(temple|shrine)$"];`;
   }
-  return `[out:json][timeout:20];(${body});out center 60;`;
+  return `[out:json][timeout:15];(${body});out center 60;`;
+}
+export function photonUrl(lat, lng, radius, q = '') {
+  if (q) return `${PHOTON}/api/?q=${encodeURIComponent(q)}&lat=${lat}&lon=${lng}&limit=15&location_bias_scale=0.2`;
+  return `${PHOTON}/reverse?lat=${lat}&lon=${lng}&radius=${(radius / 1000).toFixed(2)}&limit=40&` + POI_KEYS.concat(['railway:station', 'building:temple', 'building:shrine']).map(k => `osm_tag=${k}`).join('&');
+}
+export function parsePhoton(j, lat, lng, radius) {
+  const T = { N: 'node', W: 'way', R: 'relation' };
+  return (j && j.features || []).map(f => {
+    const pr = f.properties || {}, c = (f.geometry && f.geometry.coordinates) || [];
+    const p = { id: `osm:${T[pr.osm_type] || 'node'}/${pr.osm_id}`, src: 'osm', name: pr.name, lat: Number(c[1]), lng: Number(c[0]), category: pr.osm_key ? `${pr.osm_key}=${pr.osm_value}` : '' };
+    p.dist = Math.round(haversine(lat, lng, p.lat, p.lng));
+    return p;
+  }).filter(p => p.name && isFinite(p.lat) && p.dist <= radius && (POI_KEYS.includes(p.category.split('=')[0]) || p.category === 'railway=station' || p.category === 'building=temple' || p.category === 'building=shrine'))
+    .sort((a, b) => a.dist - b.dist);
+}
+// 候補を一つに: 同じIDは一つ、Google の候補は同じ店(60m以内・同じ名前)が OSM にあれば落とす
+export function mergePoiList(list) {
+  const out = [], ids = new Set();
+  const nm = s => norm(s).replace(/[・\-‐ー]/g, '');
+  const osm = list.filter(x => x.src === 'osm');
+  for (const x of list) {
+    if (ids.has(x.id)) continue;
+    if (x.src !== 'osm' && osm.some(o => haversine(o.lat, o.lng, x.lat, x.lng) <= 60 && nm(o.name) === nm(x.name))) continue;
+    ids.add(x.id); out.push(x);
+  }
+  return out.sort((a, b) => a.dist - b.dist);
 }
 export function parseOverpass(j, lat, lng, radius) {
   const keys = ['amenity', 'shop', 'tourism', 'leisure', 'historic', 'railway', 'craft', 'office', 'building'];
