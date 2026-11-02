@@ -314,8 +314,27 @@ test('近くの場所の候補: 名前で探す(5km 以内、名前の近い順)
   assert.equal(r.poi[0].name, '遠すぎる店');
   const bad = loadHub({ fetch: () => ({ getResponseCode: () => 504, getContentText: () => 'timeout' }) });
   const e = bad.post({ token: bad.token, action: 'poi', lat: 35, lng: 139 });
-  assert.equal(e.ok, true); assert.equal(e.poi.length, 0); assert.match(e.error, /osm 504/);
+  assert.equal(e.ok, true); assert.equal(e.poi.length, 0); assert.match(e.error, /osm\(maps\.mail\.ru\) 504, osm\(overpass\.private\.coffee\) 504/);
   assert.notEqual(bad.post({ token: bad.token, action: 'poi', lat: 35, lng: 139 }).cached, true); // 失敗は覚えない
+});
+
+test('近くの場所の候補: 照会先が落ちていたら次の照会先へ。投げられないときも同じ', () => {
+  const log = [];
+  const ok = poiFetch(log);
+  const hub = loadHub({ fetch: (url, o) => {
+    if (/mail\.ru/.test(url)) throw new Error('DNS error: maps.mail.ru');
+    if (/private\.coffee/.test(url)) { log.push({ url }); return { getResponseCode: () => 200, getContentText: () => '{"elements":[],"remark":"runtime error: Query timed out"}' }; }
+    return ok(url, o);
+  } });
+  const r = hub.post({ token: hub.token, action: 'poi', lat: 35, lng: 139 });
+  assert.equal(r.poi[0].id, 'osm:node/11');
+  assert.match(r.error, /mail\.ru.*DNS/); assert.match(r.error, /private\.coffee\) parse/);
+  assert.match(log.at(-1).url, /kumi\.systems/);
+  hub.props.OVERPASS_ENDPOINT = 'https://example.org/api/interpreter';
+  hub.post({ token: hub.token, action: 'poi', lat: 35.1, lng: 139 });
+  assert.equal(log.at(-1).url, 'https://example.org/api/interpreter');
+  const t = hub.ctx.testPoi();
+  assert.ok(Array.isArray(t.poi)); assert.equal(t.providers[0], 'osm'); // エディタからの確認用(自宅あたりを引く)
 });
 
 test('場所名の修正を place_names に追記する(シートがなければ作る)', () => {

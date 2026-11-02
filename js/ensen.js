@@ -154,6 +154,31 @@ export function poiLabel(category) {
   if (/_store$|_shop$/.test(v)) return '店';
   return '';
 }
+// 端末から直接 OSM(Overpass)を引くとき用(ハブ側の照会先が全部断ったときの控え)。ハブの overpassProvider_ と同じ問い合わせ
+export const OVERPASS_DIRECT = ['https://overpass-api.de/api/interpreter', 'https://overpass.private.coffee/api/interpreter'];
+export function overpassQuery(lat, lng, radius, q = '') {
+  const around = `around:${radius},${lat},${lng}`;
+  let body;
+  if (q) {
+    const re = q.replace(/[\\"]/g, '').replace(/[.^$|?*+()[\]{}]/g, '.');
+    body = `nw(${around})["name"~"${re}",i];nw(${around})["name:ja"~"${re}",i];`;
+  } else {
+    body = ['amenity', 'shop', 'tourism', 'leisure', 'historic', 'craft', 'office'].map(k => `nw(${around})[name][${k}];`).join('')
+      + `nw(${around})[name][railway=station];nw(${around})[name][building=temple];nw(${around})[name][building=shrine];`;
+  }
+  return `[out:json][timeout:20];(${body});out center 60;`;
+}
+export function parseOverpass(j, lat, lng, radius) {
+  const keys = ['amenity', 'shop', 'tourism', 'leisure', 'historic', 'railway', 'craft', 'office', 'building'];
+  return (j && j.elements || []).map(e => {
+    const c = e.center || e, t = e.tags || {};
+    const k = keys.find(x => t[x]);
+    const p = { id: `osm:${e.type}/${e.id}`, src: 'osm', name: t['name:ja'] || t.name, lat: Number(c.lat), lng: Number(c.lon), category: k ? `${k}=${t[k]}` : '' };
+    p.dist = Math.round(haversine(lat, lng, p.lat, p.lng));
+    return p;
+  }).filter(p => p.name && isFinite(p.lat) && p.dist <= radius).sort((a, b) => a.dist - b.dist);
+}
+
 // 外の候補から、台帳の候補と重なるもの(同じID・同じ名前)を除く
 export function poiChoices(near, poi, max = 8) {
   const ids = new Set(near.map(a => a.poi).filter(Boolean));

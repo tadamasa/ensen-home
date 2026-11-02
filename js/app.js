@@ -6,13 +6,13 @@ import { exportData, importData } from './backup.js';
 import {
   TYPES, VERBS, ORIGINS, TYPE_KEY, TYPE_ICON, VERB_ICON, VERB_ORDER, VERB_TIPS,
   esc, uuid, haversine, isoLocal, today, isDate, dayOf, timeOf, toInputValue, fromInputValue, shiftMonth, monthCells, dateLabel, gapLabel, autoSeason,
-  findActant, suggestVerb, nearbyPlaces, nameChips, poiLabel, poiChoices, isHomeMove, homeKind, echoOf,
+  findActant, suggestVerb, nearbyPlaces, nameChips, poiLabel, poiChoices, OVERPASS_DIRECT, overpassQuery, parseOverpass, isHomeMove, homeKind, echoOf,
   frontier, reunions, apprQueue, placeNameFor, isBooklogIntent, booklogCsv, READING_MEMO_URL, latestSpotFixes, applySpotFixes, spotSuspects, spotCandidates, yearReview, yearStory, yearsOf, SEASONS, meshBounds, latestWeight, mapPoints, distantCandidates, distantPrompt, parseDistant, parseExif,
 } from './ensen.js';
 
 // ---------- 状態 ----------
 const state = { marks: {}, events: [], intents: [], appraisals: [], actants: [], traces: [], around: {}, look: 'map', appr: null, pair: null, frontierOrder: 'new', frontierShown: 150, fogOrder: 'old', map: { period: '1y', off: new Set() } };
-const blankForm = () => ({ mode: 'event', ts: '', lat: null, lng: null, gps: null, place: '', placeTouched: false, type: null, name: '', verb: null, verbAuto: true, verbsOpen: false, star: false, note: '', photo: '', photoThumb: '', exif: null, trace_id: '', intent_id: '', poi: null, poiKey: '', poiBusy: false, poiFrom: null, poiRadius: 300, poiProviders: [], found: null, foundKey: '', foundBusy: false, poiId: '', poiName: '', pickOpen: false, what: '', origin: null, originName: '', itype: null });
+const blankForm = () => ({ mode: 'event', ts: '', lat: null, lng: null, gps: null, place: '', placeTouched: false, type: null, name: '', verb: null, verbAuto: true, verbsOpen: false, star: false, note: '', photo: '', photoThumb: '', exif: null, trace_id: '', intent_id: '', poi: null, poiKey: '', poiBusy: false, poiFrom: null, poiRadius: 300, poiProviders: [], poiNote: '', found: null, foundKey: '', foundBusy: false, poiId: '', poiName: '', pickOpen: false, what: '', origin: null, originName: '', itype: null });
 let form = blankForm();
 const $view = document.getElementById('view');
 const kcls = t => `t-${TYPE_KEY[t] || 'person'}`;
@@ -374,11 +374,33 @@ async function loadPoi(q = '') {
   if (form[slot + 'Key'] === key) return;
   Object.assign(form, { [slot + 'Key']: key, [slot]: null, [slot + 'Busy']: true });
   if (q) paintRecordParts();
-  const r = await sync.ask('poi', { lat: p.lat, lng: p.lng, radius: form.poiRadius, q }).catch(() => null);
+  let note = '';
+  const r = await sync.ask('poi', { lat: p.lat, lng: p.lng, radius: form.poiRadius, q }).catch(e => { note = `縁泉ハブ: ${e.message}`; return null; });
   if (form[slot + 'Key'] !== key) return; // その間に場所が変わった
-  form[slot] = (r && r.poi) || [];
+  let list = (r && r.poi) || [];
+  const providers = (r && r.providers) || [];
+  if (r && r.error) note = r.error;
+  // ハブから OSM が引けなかったら、端末から直接引く(照会先がハブを断っていても、ブラウザからは通ることがある)
+  if (!list.some(x => x.src === 'osm') && (!r || r.error || r.provider === 'none' || !providers.includes('osm'))) {
+    const rad = q ? 5000 : form.poiRadius;
+    for (const ep of OVERPASS_DIRECT) {
+      try {
+        const res = await fetch(ep, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'data=' + encodeURIComponent(overpassQuery(p.lat, p.lng, rad, q)) });
+        if (!res.ok) { note += `${note ? '・' : ''}${new URL(ep).host} ${res.status}`; continue; }
+        const got = parseOverpass(await res.json(), p.lat, p.lng, rad);
+        const seen = new Set(list.map(x => x.id));
+        list = list.concat(got.filter(x => !seen.has(x.id))).sort((a, b) => a.dist - b.dist);
+        if (!providers.includes('osm')) providers.unshift('osm');
+        note = '';
+        break;
+      } catch (e) { note += `${note ? '・' : ''}${new URL(ep).host} ${e.message}`; }
+    }
+    if (form[slot + 'Key'] !== key) return;
+  }
+  form[slot] = list;
   form[slot + 'Busy'] = false;
-  if (r && r.providers) form.poiProviders = r.providers;
+  form.poiNote = list.length ? '' : note;
+  if (providers.length) form.poiProviders = providers;
   if (location.hash.startsWith('#record') && form.type === '場所') { paintRecordParts(); drawPick(); }
 }
 // 候補を採る: 名前と位置をその場所に。外の地図の候補ならIDも持って行く(台帳が同じ場所だと覚える)
@@ -553,10 +575,12 @@ function paintRecordParts(fromTyping = false) {
     const chip = (x, i, list) => `<button class="chip${on(x)}" data-pick="${list}:${i}">${esc(x.name)} ${list === 'near' ? `<small>${x.dist}m</small>` : kind(x)}</button>`;
     if (form.poiFrom) chips += `<div class="picked" role="status">${glyph('i-pin', '')}<span><b>${esc(form.poiName || '地図で選んだところ')}</b> の位置で結びます</span><button class="btn btn--plain btn--small" id="f-unpick" aria-label="選んだ場所を外す">外す</button></div>`;
     if (near.length) chips += `<span class="chips-label">近くの、前に結んだ場所</span>${near.map((x, i) => chip(x, i, 'near')).join('')}`;
+    if (!sync.enabled()) chips += '<span class="small muted" style="width:100%">設定で縁泉ハブにつなぐと、近くの場所も出ます</span>';
+    else if (c.lat == null) chips += '<span class="small muted" style="width:100%">現在地がまだわかりません。位置情報の許可を確かめてください(写真を付けると撮影地で探します)</span>';
     if (sync.enabled() && c.lat != null) {
       chips += `<span class="chips-label">近くの場所${form.poiBusy ? '<span class="poi-wait">さがしています…</span>' : ''}</span>`;
       chips += poi.map((x, i) => chip(x, i, 'poi')).join('');
-      if (!form.poiBusy && form.poi && !poi.length) chips += `<span class="small muted">${form.poiRadius}m 以内に見つかりませんでした</span>`;
+      if (!form.poiBusy && form.poi && !poi.length) chips += `<span class="small muted">${form.poiNote ? `近くの場所を引けませんでした(${esc(form.poiNote)})` : `${form.poiRadius}m 以内に見つかりませんでした`}</span>`;
       if (form.found || form.foundBusy) {
         chips += `<span class="chips-label">「${esc(form.foundKey.split(',q:')[1] || '')}」で探した場所${form.foundBusy ? '<span class="poi-wait">さがしています…</span>' : ''}</span>`;
         chips += (form.found || []).map((x, i) => chip(x, i, 'found')).join('') || (form.foundBusy ? '' : '<span class="small muted">5km 以内に見つかりませんでした</span>');
@@ -564,7 +588,7 @@ function paintRecordParts(fromTyping = false) {
       chips += `<div class="poi-tools">${form.poiRadius < 1000 ? '<button class="chip chip--ghost" id="f-wider">もっと広く</button>' : ''}<button class="chip chip--ghost" id="f-pick" aria-expanded="${form.pickOpen}">${form.pickOpen ? '地図をとじる' : '地図で選ぶ'}</button></div>`;
       if (form.pickOpen) chips += '<div class="pick-wrap"><div id="f-pickmap" role="application" aria-label="結ぶ場所を地図で選ぶ"></div><p class="hint" style="margin:var(--space-1) 0 0">点を押すとその場所に。何もないところを押すと、その位置で結びます。</p></div>';
       const by = (form.poiProviders || []).map(x => ({ osm: '© OpenStreetMap contributors', google: 'Google Maps' })[x]).filter(Boolean);
-      if (by.length && (form.poi || form.found)) chips += `<p class="credit" style="margin:var(--space-1) 0 0;width:100%">候補: ${by.join('・')}</p>`;
+      if (by.length && ((form.poi || []).length || (form.found || []).length)) chips += `<p class="credit" style="margin:var(--space-1) 0 0;width:100%">候補: ${by.join('・')}</p>`;
     }
   } else if (form.type) {
     const { recent, often } = nameChips(state.actants, form.type);

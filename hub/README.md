@@ -66,7 +66,7 @@ Code.gs を貼り替えて保存したら、「デプロイ」→「デプロイ
 |---|---|
 | `ENSEN_SHEET_ID` | 縁泉 `ensen`(1vKPwd3k…) |
 | `ENSEN_MEDIA_FOLDER_ID` | (なし)= Drive の `ensen_media` フォルダを名前で探す |
-| `OVERPASS_ENDPOINT` | `https://maps.mail.ru/osm/tools/overpass/api/interpreter` = 結ぶ画面の「近くの場所」を OpenStreetMap から引く。`off` で止める(本家 overpass-api.de は GAS からの照会を断るので使えません) |
+| `OVERPASS_ENDPOINT` | (なし)= 結ぶ画面の「近くの場所」を OpenStreetMap から引く。maps.mail.ru → overpass.private.coffee → overpass.kumi.systems の順に、通るまで試す。入れるとその照会先だけを使い、`off` で止める(本家 overpass-api.de は GAS からの照会を断るので使えません)。ハブで引けなかったときは、アプリが端末から overpass-api.de を直接引きます |
 | `GOOGLE_PLACES_API_KEY` | (なし)= 近くの場所は OSM だけ。入れると Google Places(New) の候補を足します(小さな店に強い。Nearby Search は Pro 枠で月5,000回まで無料、同じ場所は30分覚えるので個人なら超えません) |
 | `DIARY_SHEET_ID` / `DIARY_APP_URL` | 「日記の記録」と日記アプリ |
 | `BOOKS_SHEET_ID` / `READING_APP_URL` | 読書ハブと読書メモアプリ |
@@ -75,6 +75,8 @@ Code.gs を貼り替えて保存したら、「デプロイ」→「デプロイ
 日記・読書ハブ・映画ハブは、泉の画面の「この日の日記」「この日に読み終えた本・観た映画」のために読むだけで、書き込みません。
 
 ## 近くの場所(結ぶ画面、action=poi)
+
+うまく出ないときは、スクリプトエディタで `testPoi` を選んで実行すると、照会先ごとの結果(断られた理由)が実行ログに出ます。
 
 結ぶで「場所」を選ぶと、アプリはまず自分の台帳(300m以内)を出し、ハブに近くの場所を尋ねます。ハブは OSM(Overpass)と、キーがあれば Google Places を同時に引き、近い順に返します(約100m四方・30分は覚えておく。失敗は静かに空で返し、覚えない)。
 

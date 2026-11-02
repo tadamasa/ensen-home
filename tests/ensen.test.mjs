@@ -224,3 +224,16 @@ test('近くの場所: 種類を一語に、台帳と重なる候補は除く', 
   const poi = [{ id: 'osm:node/1', name: '吹田市立 中央図書館' }, { id: 'osm:node/5', name: 'Kissa' }, { id: 'osm:node/7', name: '公園' }];
   assert.deepEqual(poiChoices(near, poi).map(x => x.id), ['osm:node/7']);
 });
+
+test('端末から直接 OSM を引くときの問い合わせと読み方', async () => {
+  const { overpassQuery, parseOverpass } = await import('../js/ensen.js');
+  assert.match(overpassQuery(35, 139, 300), /around:300,35,139\)\[name\]\[amenity\]/);
+  assert.match(overpassQuery(35, 139, 5000, '勝盛(江坂)'), /\["name"~"勝盛.江坂.",i\]/);
+  const got = parseOverpass({ elements: [
+    { type: 'way', id: 2, center: { lat: 35.002, lon: 139 }, tags: { name: 'Park', 'name:ja': '公園', leisure: 'park' } },
+    { type: 'node', id: 1, lat: 35.0005, lon: 139, tags: { name: '喫茶', amenity: 'cafe' } },
+    { type: 'node', id: 3, lat: 35.1, lon: 139, tags: { name: '遠い' } },
+    { type: 'node', id: 4, lat: 35.0001, lon: 139, tags: {} },
+  ] }, 35, 139, 300);
+  assert.deepEqual(got.map(p => [p.id, p.name, p.category]), [['osm:node/1', '喫茶', 'amenity=cafe'], ['osm:way/2', '公園', 'leisure=park']]);
+});
