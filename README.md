@@ -31,7 +31,7 @@ iPhoneのホーム画面から開く、自分用の縁泉。https://tadamasa.git
 
 - **共通ライブラリ**: DayReaders(tadamasa/diary-home の `lib/day-readers`)、スクリプトID `1AERbCrDNFVHKT1YDCTSensHNs4X8QrACyaS-p3xDFhqrUq2r7NGMuMwk`、**版 1** を固定(`hub/appsscript.json`)。使う関数は diaryForDate・booksForDate・filmsForDate・monthMarks。
 - **spot_fixes の約束**(旅先も読む): ts は `yyyy-MM-dd'T'HH:mm:ss+09:00` にそろえ、文字列のまま比べる。同じ台帳はいちばん新しい行、同じ秒なら後に追記された行が勝つ。詳しくは [hub/README.md](hub/README.md#spot_fixes-を読む相手旅先との約束)。
-- **events.source**: 縁泉GASの夜間取込で `reading`(読書メモの読了)・`movie`(映画メモの鑑賞)が入る。泉では「読書メモ」「映画メモ」と出す。
+- **events.source**: 縁泉GASの夜間取込で `reading`(読書メモの読了)・`movie`(映画メモの鑑賞)が入る。泉では「読書メモ」「映画メモ」と出す。その日の流れでは、下の「読み終えた本」「観た映画」が読めたときはそちらに任せて出さない(読めなかったときだけ流れに残す。表示だけで events は変えない。眺める・カレンダーの印・谺はそのまま数える)。
 - **読書メモ**(https://tadamasa.github.io/reading-memo/): 「読みたい」は読書メモに一本化。霧の中への「一覧を書き出す」は CSV(UTF-8、見出し `itemId,isbn13,title,status`)。itemId はブクログのアイテムID(ISBN10 か ASIN)で、読書メモの本の json にある同じ値と完全一致で突き合わせる。isbn13 は enrich の keys.isbn のまま(無いときは空。`B000PTYQZ6` は映像ソフトの JAN)。
 
 ## 開発

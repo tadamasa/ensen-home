@@ -7,7 +7,7 @@ import { exportData, importData } from './backup.js';
 import {
   TYPES, VERBS, ORIGINS, TYPE_KEY, TYPE_ICON, VERB_ICON, VERB_ORDER, VERB_TIPS,
   esc, uuid, haversine, isoLocal, today, isDate, dayOf, timeOf, toInputValue, fromInputValue, shiftMonth, monthCells, dateLabel, gapLabel, autoSeason,
-  findActant, suggestVerb, nearbyPlaces, nameChips, poiLabel, poiChoices, OVERPASS_DIRECT, overpassQuery, parseOverpass, photonUrl, parsePhoton, mergePoiList, isHomeMove, homeKind, echoOf,
+  findActant, suggestVerb, nearbyPlaces, nameChips, poiLabel, poiChoices, OVERPASS_DIRECT, overpassQuery, parseOverpass, photonUrl, parsePhoton, mergePoiList, isHomeMove, homeKind, echoOf, aroundKind, handedToAround,
   frontier, reunions, apprQueue, placeNameFor, isBooklogIntent, booklogCsv, READING_MEMO_URL, latestSpotFixes, applySpotFixes, spotSuspects, spotCandidates, yearReview, yearStory, yearsOf, SEASONS, meshBounds, latestWeight, mapPoints, distantCandidates, distantPrompt, parseDistant, parseExif,
 } from './ensen.js';
 
@@ -209,17 +209,21 @@ async function renderDay(arg) {
   setTitle('泉', { sub: `${SEASON_NAME[theme] || ''}の泉${pending ? `・未送信の縁 ${pending}` : ''}` });
   const evs = state.events.filter(e => dayOf(e.ts) === date);
   const promoted = new Set(state.events.map(e => e.trace_id).filter(Boolean));
+  // 夜間取込の本・映画の縁は、下の欄が読めたら任せる。まだ読んでいるあいだは伏せ、読めなかったら流れに戻す(renderAround)
+  const cached = state.around[date];
+  const tuck = e => aroundKind(e) && sync.enabled() && (cached ? handedToAround(e, cached) : true);
   const items = [
     ...evs.map(e => ({ ts: e.ts, html: isHomeMove(e)
       ? `<div class="node node--home"><span class="node__dot"></span><div class="node__time">${esc(timeOf(e.ts))} ${homeKind(e) === '出発' ? '自宅から行ってきます' : '自宅にただいま'}</div></div>`
-      : eventNode(e) })),
+      : (tuck(e) ? eventNode(e).replace(/^<div class="node ([^"]*)">/, `<div class="node $1" hidden data-around="${aroundKind(e)}">`) : eventNode(e)) })),
     ...traceGroups(state.traces.filter(t => dayOf(t.ts) === date && !promoted.has(t.id)).sort(sortTs)).map(g => ({ ts: g[0].ts, html: g.length > 1 ? traceGroupNode(g) : traceNode(g[0], false) })),
   ].sort(sortTs);
   const quiet = !items.length;
+  const allTucked = !quiet && items.every(i => i.html.includes(' hidden data-around='));
   $view.innerHTML = `
     ${calendarHtml(date)}
     <div class="day-head"><h2>${dateLabel(date)}</h2><a class="btn btn--tinted btn--small" href="#record/date/${date}">この日に結ぶ</a></div>
-    ${quiet ? '<p class="empty-line">静かな水面。</p>' : `<div class="flow${state.lastDay !== date ? ' flow--enter' : ''}">${items.map((i, n) => i.html.replace('<div class="node', `<div style="--i:${Math.min(n, 12)}" class="node`)).join('')}</div>`}
+    ${quiet ? '<p class="empty-line">静かな水面。</p>' : `<div class="flow${state.lastDay !== date ? ' flow--enter' : ''}">${items.map((i, n) => i.html.replace('<div class="node', `<div style="--i:${Math.min(n, 12)}" class="node`)).join('')}</div>${allTucked ? '<p class="empty-line" data-tucked-quiet>静かな水面。</p>' : ''}`}
     <div class="around" id="around"></div>`;
   state.lastDay = date;
   bindCalendar(date);
@@ -281,6 +285,15 @@ async function loadMarks(ym, date) {
   bindCalendar(date);
 }
 
+// 伏せておいた本・映画の縁のうち、下の欄に出せなかったほうを流れに戻す(d=null は読み取り失敗)
+function untuck(d) {
+  $view.querySelectorAll('.flow [data-around]').forEach(n => {
+    if (!d || !d[n.dataset.around] || d[n.dataset.around].ok !== true) n.hidden = false;
+  });
+  const q = $view.querySelector('[data-tucked-quiet]');
+  if (q && $view.querySelector('.flow > .node:not([hidden])')) q.remove();
+}
+
 // その日のまわり: 日記・読み終えた本・観た映画(縁泉ハブが読むだけ)。押したときではなく開いたときに一度だけ読む
 async function renderAround(date) {
   const el = document.getElementById('around');
@@ -288,9 +301,10 @@ async function renderAround(date) {
   let d = state.around[date];
   if (!d) {
     el.innerHTML = '<p class="hint">その日の日記を読んでいます…</p>';
-    try { d = state.around[date] = await sync.ask('day', { date }); } catch (e) { el.innerHTML = `<p class="hint">${esc(e.message)}</p>`; return; }
+    try { d = state.around[date] = await sync.ask('day', { date }); } catch (e) { el.innerHTML = `<p class="hint">${esc(e.message)}</p>`; if (el.isConnected) untuck(null); return; }
   }
   if (!location.hash.includes(date) && date !== today()) return;
+  untuck(d);
   const parts = [];
   const fold = (text, cls) => `<div class="fold-text ${cls}"><p class="fold-text__body">${esc(text)}</p><button class="fold-text__more" hidden>続きを読む</button></div>`;
   const diary = (d.diary && d.diary.entries) || [];
@@ -298,6 +312,7 @@ async function renderAround(date) {
   if (diary.length) parts.push(`<div class="sect">この日の日記<small><a href="${esc(d.diary.url)}" target="_blank" rel="noopener">日記で開く</a></small></div>
     <div class="card">${diary.map(x => `<div class="diary-line"><div class="diary-line__time">${esc(x.time)}${x.feelings ? `・${esc(x.feelings)}` : ''}</div>${fold(x.text, 'diary-line__text')}</div>`).join('')}</div>`);
   const books = (d.books && d.books.books) || [];
+  if (d.books && d.books.ok === false) parts.push(`<p class="hint">読書ハブを読めませんでした: ${esc(d.books.error || '')}</p>`);
   if (books.length) parts.push(`<div class="sect">この日に読み終えた本</div><div class="card">
     ${books.map(b => `<a class="mini" href="${esc(b.url)}" target="_blank" rel="noopener">${b.cover ? `<img src="${esc(b.cover)}" alt="">` : '<img alt="">'}<span><span class="list-row__title">${esc(b.title)}</span><br><span class="muted small">${esc(b.author)}</span></span></a>`).join('')}
   </div>`);
