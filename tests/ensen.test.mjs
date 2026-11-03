@@ -268,3 +268,23 @@ test('Google Places(端末から)の読み方', async () => {
     { id: 'ChIJb', displayName: { text: '' }, location: { latitude: 35, longitude: 139 } },
   ] }), [{ id: 'google:ChIJa', src: 'google', name: '喫茶 ほとり', lat: 35, lng: 139, category: 'google=cafe' }]);
 });
+
+test('泉の流れ: 本・映画の縁は、下の欄が読めたときだけ任せる(表示だけ)', async () => {
+  const { aroundKind, handedToAround } = await import('../js/ensen.js');
+  const book = ev('w1', '2026-10-31T21:00:00+09:00', { type: '作品', name: '現実はいつも対話から生まれる', source: 'reading' });
+  const film = ev('w2', '2026-10-31T18:00:00+09:00', { type: '作品', name: 'シャドウズ・エッジ', source: 'movie' });
+  const home = ev('w3', '2026-10-31T12:00:00+09:00', { type: '作品', name: '手で結んだ本', source: 'home' });
+  assert.equal(aroundKind(book), 'books');
+  assert.equal(aroundKind(film), 'films');
+  assert.equal(aroundKind(home), '');
+  const ok = { books: { ok: true, books: [] }, films: { ok: true, films: [] } };
+  assert.equal(handedToAround(book, ok), true);
+  assert.equal(handedToAround(film, ok), true);
+  assert.equal(handedToAround(home, ok), false); // 手で結んだ作品は流れに残す
+  // 読み取りに失敗した側だけ流れに戻す
+  const half = { books: { ok: false, error: 'no lib' }, films: { ok: true, films: [] } };
+  assert.equal(handedToAround(book, half), false);
+  assert.equal(handedToAround(film, half), true);
+  assert.equal(handedToAround(book, null), false);
+  assert.equal(handedToAround(book, {}), false);
+});

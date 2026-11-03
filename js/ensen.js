@@ -224,6 +224,14 @@ export function nameChips(actants, type, max = 5) {
 }
 
 // iOSの自宅オートメーションの到着・出発(縁ではなく暮らしの拍として小さく出す)
+// 泉の流れと「その日のまわり」で同じ本・映画を2回出さない。夜間取込の作品の縁(events.source)は、
+// 下の欄(縁泉ハブが読む「読み終えた本」「観た映画」)が読めたときだけ流れから外す。表示だけで events は変えない
+export const AROUND_OF_SOURCE = { reading: 'books', movie: 'films' };
+export const aroundKind = e => AROUND_OF_SOURCE[e && e.source] || '';
+export function handedToAround(e, around) {
+  const k = aroundKind(e);
+  return !!(k && around && around[k] && around[k].ok === true);
+}
 export const isHomeMove = e => String(e.tags || '').includes('自宅');
 export const homeKind = e => (String(e.tags || '').includes('出発') ? '出発' : '到着');
 
